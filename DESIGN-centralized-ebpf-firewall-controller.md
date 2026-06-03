@@ -743,21 +743,102 @@ graph TD
     class XDP,TC,CG prog
 ```
 
-**Rule compilation pipeline** (`pkg/compiler/rules.go`):
-- Input: list of matching CFP (and adapted GFP), the target host's labels + addresses, (for K8s) the agent's reported local pod snapshot or controller's view.
-- Select rules whose hostSelector / clusterSelector / subject match the host (central) or whose pod peers will be expanded locally.
-- Assign effective priority (explicit .priority or 1000 + index for declaration order; lower = earlier evaluation).
-- Sort by priority asc.
-- Flatten ports (if range, either emit multiple rules or keep range and match in eBPF with >= <= ).
-- Emit two artifacts:
-  1. Static concrete entries (CIDR + host-label-resolved IPs, exact 5-tuples).
-  2. Symbolic selector rules (for pod materialization by agent).
-- Serialize to protobuf blob (or JSON for debug).
-- Version = hash of (policy UIDs + generations + sorted rule content) for stability.
+**Rule Translation: From High-Level Firewall Rules (CFP/GFP) to eBPF Maps**
 
-Controller does the host-label resolution and "which CFPs apply to this ManagedHost". Agent does pod-label → local IP materialization (inserts into the LPM/hash maps the expanded /32s, respecting the rule's priority ordering).
+This section provides the detailed translation/compilation logic (the missing "how" between the high-level `CentralizedFirewallPolicy` / `GlobalFirewallPolicy` + `FirewallRule` structs and the low-level `struct rule` / map entries consumed by the eBPF datapath in `bpf/firewall.bpf.c` and `pkg/ebpf/loader.go`).
 
-**Packet processing pseudocode (XDP path; tc analogous, returns TC_ACT_*)** (updated for double-buf + complete rule_matches + explicit first-match CIDR; error paths: any parse fail -> XDP_PASS for safety):
+The goal of translation is to produce an ordered list of concrete `struct rule` entries (see the C definition earlier in this doc: priority, action, proto, src/dst ip+prefixlen, port ranges) that the XDP/tc programs can scan in priority order for first-match semantics.
+
+#### Translation Pipeline (pkg/compiler)
+
+The compiler lives in `pkg/compiler/` (compiler.go, priority.go, materialize.go, blob.go, testdata/).
+
+**High-level steps (executed centrally in the controller for a target ManagedHost):**
+
+1. **Policy Collection & Filtering**
+   - List all `CentralizedFirewallPolicy` whose `spec.hostSelector` + `spec.clusterSelector` match the target `ManagedHost` labels (and `ManagedHost.spec.addresses` for CIDR peers if needed).
+   - If the host reports `kubernetes-node=true`, also watch/adapt any `GlobalFirewallPolicy` (sibling design) that apply to this host's pods (via the GFP adapter path described in the flows above). The adapter converts GFP `subject`/`From`/`To` into equivalent CFP-style rules for the host layer.
+   - Result: a list of (policy, rule, effective_priority) tuples.
+
+2. **Priority Assignment & Global Sort (First-Match Guarantee)**
+   - Effective priority for a rule = (policy-level priority if any) + rule.`priority` (0 = highest) + tie-breaker (policy UID + rule name + declaration index for stability across reconciles).
+   - Sort **all** collected rules globally by effective priority ascending. This is critical: lower number always evaluated first, regardless of which policy they came from. This implements the "first-match wins" model (same philosophy as Calico GlobalNetworkPolicy and AdminNetworkPolicy).
+   - Multiple policies for the same host are merged this way; there is no automatic "deny wins" or other conflict resolution — explicit priorities are the user's responsibility.
+
+3. **Peer Resolution (Central for static, Agent for dynamic)**
+   - For each peer in a rule's `From`/`To`:
+     - **IPBlocks + Except**: Emit as concrete `src_ip`/`src_prefixlen` (or dst). Handle Except by emitting complementary narrower rules or letting the agent handle (prefer controller for static).
+     - **NodeSelector / ExternalIDSelector**: Resolve using the `ManagedHost` labels + `spec.addresses` + `spec.externalID`. Emit concrete /32 (or host IP) entries. This happens centrally because the controller has the authoritative `ManagedHost` view.
+     - **NamespaceSelector + PodSelector** (K8s only): Do **not** resolve centrally. Emit a "symbolic" rule entry carrying the selector info + original priority. The agent (on the K8s node) will use its local pod informer/cache (node-scoped) to expand matching pods' IPs into concrete /32 rules at the exact same priority position in the final list. This keeps the controller from needing full cluster pod visibility and allows dynamic pod IPs.
+   - Result after this step: a list containing a mix of fully concrete rules and a few symbolic "pod expansion" rules (only for K8s hosts).
+
+4. **Port & Protocol Normalization**
+   - `Port` with `EndPort`: Either duplicate the rule for each port in the range (simple, but increases rule count) **or** keep `src_port_start/end` + `dst_port_start/end` fields in `struct rule` and implement `ports_match(pkt_port, start, end)` in eBPF (preferred for v1; ranges are common for ephemeral ports).
+   - Protocol: default to 0 (any) if not specified. TCP/UDP/ICMP etc. map directly to `ip->protocol`.
+   - Source ports: supported in the model (eBPF design) but used sparingly (ephemeral ports make them less useful for ingress; document guidance).
+
+5. **Placement into eBPF Map Types (Optimization)**
+   - **Primary**: All rules go into the priority-ordered `ARRAY` (double-buffered `_0`/`_1`). The eBPF scan (`for i=0; i<rule_count; i++`) walks in priority order and does `rule_matches` (explicit prefix + port + proto).
+   - **Fast path (optional, controller heuristic)**: High-frequency exact 5-tuples can be pre-populated into a separate `HASH` `exact_five_tuple_v4` map (lookup before the ordered scan). The compiler can detect "this rule is a single /32 + single port" and promote it.
+   - **LPM fastpath (limited)**: Only for very broad pure-CIDR rules (e.g. "deny all from 10.0.0.0/8") that the controller decides are better in the `LPM_TRIE`. These are placed *after* the ordered scan in eBPF (post-ordered last resort) to preserve explicit priority. The compiler avoids putting selector-based rules here.
+   - This hybrid (ordered ARRAY for correctness + LPM/HASH for perf) is what enables both the first-match guarantee and good performance.
+
+6. **Blob Serialization & Versioning**
+   - Serialize the final ordered list of `struct rule` (plus default_action, rule_count, any shard metadata for future) into a compact `PolicyBlob` (protobuf recommended for wire; see proto in the gRPC section).
+   - Version string = stable hash of (all contributing policy UIDs + generations + the sorted concrete rule content). This allows agents and status to detect "same policy, no-op".
+   - The blob may contain "symbolic" hints for the remaining pod expansions (agent-only).
+
+7. **Agent-Side Final Materialization (only for symbolic pod rules)**
+   - On `PolicyUpdate` receipt, the agent deserializes the blob.
+   - For any symbolic pod-selector rules, it queries the local pod cache, generates the matching pod IP /32 entries, and inserts them into the concrete list **at the original rule's priority position** (splitting or cloning the rule as needed to keep order).
+   - Then calls `loader.ApplyPolicy(version, final_concrete_rules)` which populates the *inactive* double-buffer and does the atomic flip.
+
+**Example Translation**
+
+Input (simplified CFP + one adapted GFP rule):
+
+```yaml
+# CFP
+spec:
+  hostSelector: {matchLabels: {env: prod}}
+  ingress:
+  - name: allow-https-from-bastion
+    priority: 10
+    action: Allow
+    from:
+    - ipBlocks: ["10.0.100.0/24"]
+    ports:
+    - protocol: TCP
+      port: 443
+  - name: deny-ssh-except-bastion
+    priority: 100
+    action: Deny
+    from:
+    - ipBlocks: ["0.0.0.0/0"]
+    ports:
+    - protocol: TCP
+      port: 22
+```
+
+(Plus a GFP that says "allow from frontend pods to these hosts on 8080" — adapted for the host.)
+
+After central compilation for a specific prod host (with label `env=prod`):
+
+- Rule 0 (prio 10): action=Allow, src=10.0.100.0/24, dst=hostIP/32 (or any), dst_port=443, proto=TCP
+- Rule 1 (prio 50, from adapted GFP): action=Allow, src=10.244.5.7/32 (concrete pod IP expanded centrally or symbolically), dst_port=8080...
+- Rule 2 (prio 100): action=Deny, src=0.0.0.0/0, dst=..., dst_port=22, proto=TCP
+
+The agent, if it had a symbolic pod rule, would expand "frontend pods on this node" into additional /32 entries at the correct priority slot before calling the loader.
+
+The eBPF `struct rule` array will contain these entries (IPs in network byte order, prefixlens set).
+
+The eBPF scan will evaluate them in array order (which matches priority).
+
+This translation preserves the user's intent while producing something the kernel verifier + eBPF maps can execute efficiently.
+
+The compiler must be thoroughly unit-tested with `testdata/` (CFP YAML + expected sorted rule list or blob).
+
+#### Packet processing pseudocode (XDP path; tc analogous, returns TC_ACT_*) (updated for double-buf + complete rule_matches + explicit first-match CIDR; error paths: any parse fail -> XDP_PASS for safety):
 
 ```c
 SEC("xdp")
@@ -1229,6 +1310,115 @@ These were informed by review of cilium/ebpf examples, bpfman design, xdp-projec
 8. **Decommission**: Remove labels from ManagedHost / Nodes → controller stops pushing; delete CFPs → agents can be drained with a final "allow-all" policy or left enforcing last state; uninstall.
 
 **Canary & validation**: e2e in CI uses kind (with and without Cilium), applies CFP, uses a test client to send packets (or `nc`, `curl`), asserts via agent metrics / ringbuf that drops/allows match. Also baremetal-like test via rootful container simulating host.
+
+## Operating the eBPF Firewall Controller (Day-2)
+
+This section designs the operational model for running the controller and agents in production (complements the Rollout Plan above and the existing Observability/Security/Packaging sections).
+
+### Deployment & Configuration
+
+**Kubernetes (recommended for most fleets)**:
+- Two Helm charts (or one umbrella): `ebpf-firewall-controller` (Deployment + Service for gRPC, leader election via leases) and `ebpf-firewall-agent` (DaemonSet).
+- Key Helm values (per design):
+  - `controller.grpcAddress`: external LB or ClusterIP for baremetal agents to reach.
+  - `controller.eventSampleRate`: 0.01–1.0 for ringbuf forwarding (reduce noise).
+  - `agent.attachMode`: `xdp` (native preferred), `xdp-generic`, `tc` (ingress/egress), `cgroup`.
+  - `agent.tcPriority`: 49152 (or lower number = earlier in tc chain) so host rules run before CNI tc programs.
+  - `agent.bootstrapAllowDuration`: 30s–5m (safety net on first deploy or after long outage).
+  - `agent.emergencyAllowCIDR`: injected as a very high-priority allow rule (e.g. "mgmt jump host CIDR").
+  - `useBpfman: false` (opt-in for declarative program CRs on K8s nodes).
+  - Resource requests for agent are small (CPU 10m–100m, memory 32–64Mi) but give headroom for map population under load.
+- The agent DaemonSet mounts bpffs (`/sys/fs/bpf`) and uses `hostNetwork: true` or specific capabilities.
+
+**Bare metal / VMs (no Kubernetes on the target)**:
+- Static binary or container (Docker/Podman) + systemd unit or supervisord.
+- Config file or env/CLI flags for: controller gRPC endpoint(s), mTLS certs, static labels, externalID, log level, metrics port.
+- On startup the agent binary does `RegisterHost` and then the normal stream + loader loop.
+- For cloud VMs: cloud-init or image baking can pre-install the agent + certs + discovery of controller address via user-data or a small sidecar.
+
+**Multi-cluster / hub-spoke**:
+- Controller always runs on the "hub" (management) cluster.
+- Agents in remote K8s clusters or bare hosts just need network reachability to the controller's gRPC address (no inbound from hub to spokes required).
+- Use the sibling `ManagedCluster` + multicluster-runtime only if you want the eBPF controller to auto-discover remote K8s Nodes and synthesize `ManagedHost` entries.
+
+### CLI & Agent Operations Surface
+
+The agent binary (`firewall-agent`) exposes:
+
+- `firewall-agent serve` (the normal mode).
+- `firewall-agent dump-maps` — pretty-print current active/inactive rules (human + JSON) using the same loader.
+- `firewall-agent test-packet --src 1.2.3.4 --dst 10.0.0.1 --dport 443 --proto tcp` — simulates the lookup against the loaded maps (great for runbooks; uses the same `lookup_action` logic in userspace for fidelity).
+- `firewall-agent force-apply --version v123 --blob-file /tmp/policy.bin` (protected by local unix socket or token) — emergency bypass of controller.
+- `firewall-agent breakglass` — temporarily install a high-prio "allow SSH from my current IP" rule for a short time (writes directly to inactive + flip, with audit log).
+- Metrics endpoint (`:9090/metrics`): `ebpf_firewall_packets_total{action,reason}`, `ebpf_firewall_map_utilization`, `ebpf_firewall_last_applied_version`, ringbuf queue depth, etc.
+- pprof on localhost for CPU/memory when debugging agent bloat.
+
+Controller binary has similar debug subcommands + a `/healthz` and optional gRPC reflection.
+
+### Debugging & Troubleshooting Runbooks
+
+**"I pushed a bad policy and the host is unreachable"**:
+1. From a jump host in the emergency CIDR: `ssh ...` (if the rule allowed it) or use cloud console.
+2. On the host: `firewall-agent breakglass --duration 10m` or manually `echo 1 > /sys/fs/bpf/firewall/.../config` (or the force-allow path in the loader).
+3. `kubectl patch centralizedfirewallpolicy bad-ssh --type merge -p '{"spec":{"ingress":[...]}}'` (or delete the offending rule/CFP).
+4. Watch `kubectl get cfp bad-ssh -o yaml` → `perHostStatus` for the host to go Applied=True again.
+5. Agent logs will show the flip and the ringbuf "policy_swapped" event.
+
+**View what is actually enforced on a host**:
+- `bpftool map dump pinned /sys/fs/bpf/firewall/ingress_ordered_rules_v4_0` (or the active one via the config map).
+- `firewall-agent dump-maps --active` (much friendlier).
+- `bpftool prog show` + `bpftool prog dump xlated id <id>` to see the loaded bytecode.
+
+**Why is this packet being dropped?**
+- Enable sampling or temporary "log all decisions" mode via agent flag/config.
+- Read ringbuf: `firewall-agent` prints events with `verdict_reason` and `rule_prio`.
+- Correlate with controller events: the controller turns important ringbuf events into Kubernetes Events on the CFP/ManagedHost ("Rule 42 (deny-ssh) dropped packet from 1.2.3.4:54321").
+
+**Agent not seeing latest policy**:
+- Check `ManagedHost` status for that host (Ready? lastRegistered?).
+- Controller logs: "no active stream for host X" → agent connectivity problem (mTLS cert expired, network, gRPC LB issue).
+- Agent side: last error in its local status file or metrics.
+- Re-register forces a full resync.
+
+**High map utilization or rule count warnings**:
+- The compiler and agent both surface this in status. Split the CFP by hostSelector or use broader CIDRs. For >v1 limits see the documented sharding strategy (post-v1).
+
+**Kernel / attach issues**:
+- Agent logs the attach result + discovered features on RegisterHost.
+- `bpftool net` or `ip link show` to see XDP/tc attachments.
+- For XDP native not available → fall back to generic (performance warning in status).
+
+### Monitoring, Alerting & Observability (expansion)
+
+In addition to the ringbuf + perHostStatus already described:
+
+- Controller metrics: `ebpf_controller_hosts_registered`, `ebpf_controller_compiles_total`, `ebpf_controller_push_latency_seconds{host}`, `ebpf_controller_policy_versions`.
+- Agent metrics + the ones listed in CLI section.
+- Grafana dashboard template (shipped in the chart): per-host policy age, drop rate by priority band, map utilization heat map, agent CPU when under attack (drops are cheap).
+- Alerts examples:
+  - `ebpf_firewall_map_utilization > 0.8` for 5m (split policy soon).
+  - Host has `Applied=False` for > 10m.
+  - Sudden spike in drops from a new source after a policy change (possible bad rule or attack).
+  - Agent version skew across fleet.
+
+Events from the controller (on CFP/MH) + agent-forwarded ringbuf events give a good audit trail for "who changed what and what was the effect".
+
+### Policy Lifecycle Operations (GitOps friendly)
+
+- Author CFPs in Git (or via a policy UI that emits YAML).
+- Flux/Argo applies them → controller picks up → pushes.
+- To test a change: apply a narrow CFP with a tight hostSelector first (canary hosts), observe metrics/ringbuf, then widen the selector or promote to a broader policy.
+- Rollback a single policy: `kubectl apply -f previous-version.yaml` or edit the generation.
+- View effective rules for a host: the controller can expose a `kubectl get managedhost <name> -o yaml` with a debug annotation or a subresource that returns the last blob it sent (or the compiler can have a `dry-run` mode).
+- Emergency global allow: a special "breakglass" CFP with a very high priority allow-everything rule + short TTL annotation that the controller honors by pushing a temporary override.
+
+### Upgrades & Compatibility
+
+- Controller and agent versions negotiate blob format version in the Register/PolicyUpdate messages.
+- Rolling DaemonSet update is safe (old agents continue enforcing the last blob they received; new controller can still serve old-format blobs during transition).
+- eBPF program upgrade: use `bpf_link` (preferred) or dual-program attach + atomic flip of a program selector map (more advanced, post-v1 or via bpfman).
+
+This operational model is deliberately "GitOps + kubectl + bpftool + agent CLI" first, with automation layered on top. It matches the "platform team" audience of the sibling design while adding the host/eBPF-specific tools that operators will need daily.
 
 ## Open Questions
 
