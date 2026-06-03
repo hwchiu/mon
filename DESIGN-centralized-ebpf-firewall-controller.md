@@ -98,25 +98,25 @@ Running both controllers on the same hub is the expected pattern for teams wanti
 ```mermaid
 graph TD
     subgraph Hub["Hub / Management Cluster"]
-        CFP[CentralizedFirewallPolicy CRs<br/>firewall.networking.example.com/v1alpha1]
+        CFP["CentralizedFirewallPolicy CRs<br/>firewall.networking.example.com/v1alpha1"]
         GFP["GlobalFirewallPolicy CRs<br/>also watched for K8s node adaptation"]
-        MH[ManagedHost CRs<br/>inventory + labels + status]
+        MH["ManagedHost CRs<br/>inventory + labels + status"]
         MC["ManagedCluster CRs<br/>optional for cross-cluster K8s node discovery"]
         Secrets[(Kubeconfig Secrets for MC provider)]
         Ctrl["CentralizedFirewallPolicy Controller<br/>with GFP adapter path<br/>leader-elected Deployment + gRPC server"]
-        Compiler[pkg/compiler<br/>select + prioritize + blob generation]
-        Reg[Host Registry + gRPC<br/>connection manager]
+        Compiler["pkg/compiler<br/>select + prioritize + blob generation"]
+        Reg["Host Registry + gRPC<br/>connection manager"]
     end
 
     subgraph "K8s Nodes (DaemonSet agents)"
         K8sNode1["Node 'eu-prod-k8s-07'<br/>labels: region=eu,env=prod<br/>+ local Pod cache (podIP→labels)"]
-        AgentK8s[firewall-agent<br/>DaemonSet<br/>gRPC client + CO-RE loader<br/>XDP/tc + cgroup]
+        AgentK8s["firewall-agent<br/>DaemonSet<br/>gRPC client + CO-RE loader<br/>XDP/tc + cgroup"]
         EBPFK8s["eBPF progs + maps<br/>pinned at /sys/fs/bpf/firewall/"]
     end
 
     subgraph "Bare Metal / VMs (standalone agents)"
         Bare1["baremetal-01<br/>labels: role=db,zone=dmz<br/>externalID: i-0abc123"]
-        AgentBare[firewall-agent<br/>systemd / container<br/>gRPC + loader]
+        AgentBare["firewall-agent<br/>systemd / container<br/>gRPC + loader"]
         EBPFBare["eBPF progs + maps"]
     end
 
@@ -125,9 +125,9 @@ graph TD
     end
 
     CFP -->|watch + reconcile| Ctrl
-    GFP -->|watch (adapter path)| Ctrl
+    GFP -->|watch adapter path| Ctrl
     MH -->|watch + label changes| Ctrl
-    MC -->|watch (optional sync)| Ctrl
+    MC -->|watch optional sync| Ctrl
     Ctrl --> Compiler
     Ctrl --> Reg
     Reg -->|RegisterHost + bidirectional stream<br/>PolicyUpdate blobs| AgentK8s & AgentBare
@@ -238,25 +238,25 @@ flowchart TD
     Start["Agent start<br/>DaemonSet or systemd"]
     Start --> TryPinned[Try load pinned maps/programs<br/>/sys/fs/bpf/firewall/...]
     TryPinned --> HasPinned{Has valid pinned + last_version file?}
-    HasPinned -->|yes| Recover[RecoverOnStart()<br/>verify active set + rule_count<br/>enforce last-good immediately]
+    HasPinned -->|yes| Recover["RecoverOnStart<br/>verify active set + rule_count<br/>enforce last-good immediately"]
     HasPinned -->|no| BootstrapAllow["Enter short bootstrap-allow window<br/>configurable, or until first policy"]
-    Recover --> Register[RegisterHost gRPC call<br/>mTLS + labels + bpf_features + kernel + node_uid?]
+    Recover --> Register["RegisterHost gRPC call<br/>mTLS + labels + bpf_features + kernel + node_uid"]
     BootstrapAllow --> Register
     Register --> Validate{Validate + MH Ready?}
-    Validate -->|K8s| AutoApprove[TokenReview + node-name claim → auto Ready]
-    Validate -->|Bare| PendingApproval[MH created with PendingApproval condition]
-    PendingApproval --> Human[Platform/human approves MH → Ready=True]
-    AutoApprove --> Stream[Open/keep bidirectional gRPC stream]
+    Validate -->|K8s| AutoApprove["TokenReview + node-name claim<br/>auto Ready"]
+    Validate -->|Bare| PendingApproval["ManagedHost created with PendingApproval condition"]
+    PendingApproval --> Human["Platform or human approves ManagedHost<br/>Ready=True"]
+    AutoApprove --> Stream["Open or keep bidirectional gRPC stream"]
     Human --> Stream
-    Stream --> FirstPolicy[Receive current PolicyUpdate from controller]
-    FirstPolicy --> Apply[ApplyPolicy: populate inactive, flip active_idx, fsync last_version]
-    Apply --> MainLoop[Start ringbuf reader + stats goroutine]
-    MainLoop --> Hook[Packet hits XDP or tc hook]
-    Hook --> Enforce[Enforce using active maps + prefix_match + priority order]
-    Enforce -->|decision| Emit[emit to ringbuf if sampled or drop]
-    Emit --> ReadRB[Agent reads ringbuf events]
-    ReadRB --> Forward[rate-limit + batch → local logs or upstream to controller]
-    Forward --> PeriodicReport[Periodic + on-change ReportStatus to controller]
+    Stream --> FirstPolicy["Receive current PolicyUpdate from controller"]
+    FirstPolicy --> Apply["ApplyPolicy<br/>populate inactive, flip active_idx, fsync last_version"]
+    Apply --> MainLoop["Start ringbuf reader + stats goroutine"]
+    MainLoop --> Hook["Packet hits XDP or tc hook"]
+    Hook --> Enforce["Enforce using active maps<br/>prefix_match + priority order"]
+    Enforce -->|decision| Emit["Emit to ringbuf if sampled or drop"]
+    Emit --> ReadRB["Agent reads ringbuf events"]
+    ReadRB --> Forward["Rate-limit + batch<br/>local logs or upstream to controller"]
+    Forward --> PeriodicReport["Periodic + on-change ReportStatus to controller"]
     PeriodicReport --> Stream
     Stream -->|new policy or reconnect| Apply
     OutageNote["Controller outage?<br/>Continue enforcing last applied (fail-static)"]
@@ -723,25 +723,25 @@ struct rule_event evt;  // zeroed before use in paths below
 ```mermaid
 graph TD
     subgraph "eBPF Maps (pinned /sys/fs/bpf/firewall/...)"
-        LPM[ingress_lpm_src_v4<br/>LPM_TRIE<br/>key: prefixlen+addr<br/>value: action/index]
-        ORD0[ingress_ordered_rules_v4_0<br/>ARRAY (active or shadow)<br/>value: struct rule {prio, action, proto, ports, src/dst ip+prefix}]
+        LPM["ingress_lpm_src_v4<br/>LPM_TRIE<br/>key prefixlen+addr<br/>value action/index"]
+        ORD0["ingress_ordered_rules_v4_0<br/>ARRAY active or shadow<br/>value struct rule with prio/action/proto/ports/src-dst prefix"]
         ORD1["ingress_ordered_rules_v4_1<br/>double-buffer pair"]
-        EXACT[exact_five_tuple_v4<br/>HASH<br/>key: 5-tuple<br/>value: action]
-        RB[RINGBUF events<br/>{ts,5tuple,action,rule_id}]
+        EXACT["exact_five_tuple_v4<br/>HASH<br/>key 5-tuple<br/>value action"]
+        RB["RINGBUF events<br/>ts, 5tuple, action, rule_id"]
         CFG["global_config<br/>ARRAY[1]<br/>active_idx + default_action + version"]
         LPM2[egress_* maps ...]
     end
 
     subgraph "Programs (CO-RE, tail-call or direct attach)"
-        XDP[XDP prog<br/>fast exact → ordered scan → LPM → default]
-        TC[tc egress prog<br/>same maps]
-        CG[cgroup_skb optional<br/>per-pod scoping]
+        XDP["XDP prog<br/>fast exact → ordered scan → LPM → default"]
+        TC["tc egress prog<br/>same maps"]
+        CG["cgroup_skb optional<br/>per-pod scoping"]
     end
 
     XDP & TC & CG -->|lookup active via cfg.active_idx| LPM & ORD0 & ORD1 & EXACT & CFG
     XDP & TC -->|on drop/match| RB
     Select["ORD0 / ORD1 selection"]
-    CFG -->|atomic flip (single u32 write to active_idx)| Select
+    CFG -->|atomic flip, single u32 write to active_idx| Select
 
     classDef map fill:#e1f5fe,stroke:#0277bd
     classDef prog fill:#f3e5f5,stroke:#7b1fa2
@@ -906,16 +906,16 @@ flowchart TD
     Pkt[Packet at XDP/tc hook] --> Parse[Parse eth/ip/tcp-udp<br/>minimal bounds checks]
     Parse -->|bounds fail| PassErr["XDP_PASS / TC_ACT_OK<br/>fail static safe"]
     Parse --> Exact["Hash lookup exact_5tuple<br/>srcIP, srcPort, dstIP, dstPort, proto"]
-    Exact -->|hit| Action1[Return action<br/>+ ringbuf sample]
-    Exact -->|miss| GetActive[cfg = global_config[0]<br/>active_idx = cfg->active_idx]
-    GetActive --> Scan[Iterate active ordered_rules_0 or _1 ARRAY<br/>0..rule_count in priority order]
-    Scan --> Match{rule_matches(ip,ports,r)?<br/>explicit prefix_match(src/dst_prefixlen)<br/>+ port range + proto (no LPM here)}
-    Match -->|yes first| Action2[Allow/Deny<br/>ringbuf on drop (full event struct)]
+    Exact -->|hit| Action1["Return action<br/>+ ringbuf sample"]
+    Exact -->|miss| GetActive["Read global_config index 0<br/>active_idx = cfg.active_idx"]
+    GetActive --> Scan["Iterate active ordered_rules_0 or _1 ARRAY<br/>0..rule_count in priority order"]
+    Scan --> Match{"rule_matches?<br/>prefix_match + port range + proto"}
+    Match -->|yes first| Action2["Allow or Deny<br/>ringbuf on drop with full event struct"]
     Match -->|no more| LPMFallback["Optional LPM broad tries<br/>only for pure-CIDR fastpaths"]
-    LPMFallback --> Default[Consult cfg->default_action]
-    Default --> Action3[Final XDP_PASS / XDP_DROP / TC_ACT_OK / SHOT]
-    Action1 & Action2 & Action3 --> Stats[Update per-rule / global counters in maps]
-    Action2 --> Ring[ bpf_ringbuf_output event<br/>{ts, 5tuple, rule_prio, iface, action, ...} ]
+    LPMFallback --> Default["Consult cfg.default_action"]
+    Default --> Action3["Final XDP_PASS / XDP_DROP / TC_ACT_OK / SHOT"]
+    Action1 & Action2 & Action3 --> Stats["Update per-rule or global counters in maps"]
+    Action2 --> Ring["bpf_ringbuf_output event<br/>ts, 5tuple, rule_prio, iface, action, ..."]
 ```
 
 **Atomic Update Code Sketch** (addresses Issue 1; concrete for PR5 evolution + PR7; placed here for visibility next to maps/pseudocode. Agent in pkg/ebpf/loader/loader.go + maps helpers. Uses duplicated _0/_1 maps + single atomic cfg flip. Restart uses pinned + last_version file + optional last_version map written on flip):
