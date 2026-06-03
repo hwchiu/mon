@@ -1,14 +1,21 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /* 
  * firewall.bpf.c
- * Centralized eBPF firewall (XDP + tc) - bootstrap implementation per DESIGN-centralized-ebpf-firewall-controller.md
+ * Centralized eBPF firewall (XDP + tc) - bootstrap implementation per
+ * DESIGN-centralized-ebpf-firewall-controller.md
  *
- * Key features implemented in this starter:
+ * The high-level CentralizedFirewallPolicy / GlobalFirewallPolicy rules
+ * (FirewallRule with selectors, ports, action, priority) are translated by
+ * the controller's pkg/compiler (7-step pipeline: collection, priority sort,
+ * central host resolution, symbolic pod rules) + agent materialization into
+ * the concrete `struct rule` entries here.
+ *
+ * Key features in this starter:
  * - Double-buffered rule maps (_0 / _1) + active_idx in config for atomic policy swap
  * - Priority-ordered scan for first-match semantics (independent of prefix length)
  * - LPM for selected broad CIDR fast-paths (post-ordered)
  * - Ringbuf for drop/allow events (observable by agent)
- * - Basic 5-tuple + prefix matching
+ * - Basic 5-tuple + prefix matching (see rule_matches + prefix_match)
  *
  * This is a v1 bootstrap. Real version will be generated/expanded in PR5+.
  */

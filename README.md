@@ -23,6 +23,7 @@ All designs are the result of a rigorous write → review → revise loop (multi
 
 - **File**: [DESIGN-centralized-ebpf-firewall-controller.md](./DESIGN-centralized-ebpf-firewall-controller.md)
 - **Focus**: Complementary high-performance enforcement plane. Central controller (K8s operator or standalone) distributes compiled policy to node agents that load eBPF programs (XDP for ingress, tc for egress, cgroup for container scoping) and enforce via maps. Targets bare-metal, VMs, and K8s nodes (host + pod traffic) with very low overhead and high pps.
+  - Now includes expanded architecture flows, full "Rule Translation" details (how CFP/GFP rules become eBPF struct rule map entries), and a comprehensive "Operating the eBPF Firewall Controller (Day-2)" section (deployment, CLI, runbooks, monitoring, policy ops).
 - **Key Features**:
   - Reuses/adapts patterns and the `GlobalFirewallPolicy` (GFP) from Design #1 where possible (eBPF controller can watch GFP for K8s nodes and perform host/pod materialization + compilation).
   - New `CentralizedFirewallPolicy` (CFP) + `ManagedHost` for broader host/VM/bare-metal fleets (labels, external ID, cloud metadata, pending approval for non-K8s).

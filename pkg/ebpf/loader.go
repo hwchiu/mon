@@ -3,12 +3,21 @@ Package ebpf contains the CO-RE loader and map management for the centralized
 eBPF firewall agent/controller.
 
 This is the bootstrap implementation corresponding to PR5 in
-DESIGN-centralized-ebpf-firewall-controller.md.
+DESIGN-centralized-ebpf-firewall-controller.md (and the detailed
+"Rule Translation" and "Operating the eBPF Firewall Controller (Day-2)"
+sections added later).
 
-Real version will:
-- Use bpf2go or cilium/ebpf to load firewall.bpf.c
-- Implement ApplyPolicy (populate inactive buffer, flip active_idx)
-- Implement RecoverOnStart using pinned maps + /var/lib/.../last_policy_version
+Key responsibilities (see design for full details):
+- Receive PolicyBlob from controller (result of the 7-step compilation
+  pipeline in pkg/compiler: central host resolution + agent pod materialization).
+- Perform final local materialization for any symbolic pod-selector rules.
+- Populate the *inactive* double-buffer (ordered_rules_v4_0/1 etc.).
+- Atomic flip of active_idx in global_config.
+- Write last_policy_version file + pinned last_version map for RecoverOnStart.
+- Ringbuf consumption and forwarding.
+- CLI surface for ops (dump-maps, test-packet, breakglass, etc.).
+
+Real version will use bpf2go or cilium/ebpf to load firewall.bpf.c.
 */
 
 package ebpf
@@ -52,20 +61,32 @@ func (l *Loader) LoadAndAttach(iface string, mode string) error {
 	return nil
 }
 
-// ApplyPolicy implements the atomic double-buffer swap described in the design.
-// 1. Populate the inactive set of maps from the compiled policy blob.
-// 2. Flip the active_idx in the config map (single atomic update).
-// 3. Write last_version file for crash recovery.
+// ApplyPolicy implements the atomic double-buffer swap described in the design
+// (see "Rule Translation" section and Atomic Update Code Sketch).
+//
+// steps (high level):
+// 1. (Caller / agent) has already performed final materialization of any
+//    symbolic podSelector rules from the PolicyBlob (the 7-step compiler
+//    pipeline did central host/node resolution; agent does local pod IPs).
+// 2. Choose inactive buffer (1 - current active_idx).
+// 3. bpf_map_update_batch the final concrete struct rule entries into the
+//    inactive ordered array (and LPM/exact as decided by compiler).
+// 4. Update global_config (active_idx will be flipped, plus rule_count,
+//    default_action, version_hash).
+// 5. Atomic flip (single u32 write to active_idx).
+// 6. Persist last_policy_version file + last_version map for recovery.
+// 7. Emit internal event / update metrics.
 func (l *Loader) ApplyPolicy(policyVersion string, rules []byte) error {
-	// rules would be the serialized compiled rules (or we materialize here).
-	// See Atomic Update Code Sketch in the design doc.
+	// rules is the final list of concrete eBPF-ready rules after full
+	// translation (central + local materialization).
 	fmt.Printf("ApplyPolicy stub: version=%s, rulesLen=%d\n", policyVersion, len(rules))
 
-	// In real code:
-	// - choose inactive idx = 1 - current active
-	// - bpf_map_update_batch into the inactive ordered_rules_xxx
-	// - update global_config with new active_idx + rule_count + default_action
-	// - fsync last_policy_version file
+	// Real implementation:
+	// - determine next = 1 - current
+	// - populate inactive maps
+	// - write config for the new active set
+	// - flip
+	// - fsync last_policy_version
 
 	_ = os.WriteFile("/var/lib/firewall-agent/last_policy_version", []byte(policyVersion), 0644)
 	return nil
