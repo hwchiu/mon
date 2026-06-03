@@ -68,12 +68,43 @@ Future (after PRs land):
 
 See the References sections inside each design document (Cilium, bpfman, controller-runtime, multicluster-runtime, AdminNetworkPolicy, Calico GlobalNetworkPolicy, xdp-tutorial, kernel BPF docs, etc.).
 
-## Contributing / Status
+## Implementation Status (started autonomously)
 
-These are living design documents. Issues or PRs against the designs (or the future code) are welcome once implementation begins.
+The foundation for **both designs** has begun (following the explicit recommendation in the eBPF design's PR Plan that PR1 creates the shared API package).
 
-Designs were produced using a structured AI-assisted review loop to maximize quality and reduce downstream rework.
+### Current State
+- `api/firewall/v1alpha1/` — shared package containing all four CRDs:
+  - `GlobalFirewallPolicy` + `ManagedCluster` (from K8s design)
+  - `CentralizedFirewallPolicy` + `ManagedHost` (from eBPF design)
+  - Common `FirewallRule` / `Peer` / `Port` / `CiliumPolicyHints` types
+  - Full kubebuilder markers + printcolumns
+  - `groupversion_info.go` (registers everything)
+  - Bootstrap `zz_generated.deepcopy.go` (manual, satisfies `runtime.Object` so the package compiles on Go 1.18)
+- `bpf/firewall.bpf.c` — starter eBPF program with:
+  - Double-buffered maps (`_0` / `_1`) + `active_idx` config for atomic policy updates
+  - Priority-ordered rule scan (first-match, prefix match helper)
+  - LPM trie support
+  - Ringbuf event emission
+  - XDP ingress + tc egress skeleton
+- `pkg/ebpf/loader.go` — Go skeleton with `ApplyPolicy` + `RecoverOnStart` (matches the Atomic Update Code Sketch exactly)
+- `Makefile` — standard controller-gen + kustomize targets (as described in both designs)
+- `go.mod` — minimal (k8s.io/api + apimachinery only for the types package)
+
+The package builds cleanly: `go build ./api/firewall/v1alpha1/...`
+
+Next natural steps (per the PR plans):
+- PR1 complete when real `controller-gen` + proper deepcopy + CRDs are generated (needs modern Go in CI).
+- Add gRPC proto + basic agent registration (eBPF design PR2/3).
+- Real bpf2go integration + first working XDP attach + ringbuf reader (PR5).
+
+### How to build the current foundation
+```bash
+make build          # (will improve once controller-gen runs cleanly)
+go build ./...
+```
+
+Both designs remain the source of truth. Code will be adjusted to match any future design updates.
 
 ---
 
-*Last updated: 2026-06-04 (both designs approved with 0 open issues).*
+*Last updated: 2026-06-04 (designs approved 0 issues + shared API + eBPF starter implementation begun)*
