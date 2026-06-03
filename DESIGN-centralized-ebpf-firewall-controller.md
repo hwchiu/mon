@@ -99,11 +99,11 @@ Running both controllers on the same hub is the expected pattern for teams wanti
 graph TD
     subgraph Hub["Hub / Management Cluster"]
         CFP[CentralizedFirewallPolicy CRs<br/>firewall.networking.example.com/v1alpha1]
-        GFP[GlobalFirewallPolicy CRs<br/>(also watched for K8s node adaptation)]
+        GFP["GlobalFirewallPolicy CRs<br/>also watched for K8s node adaptation"]
         MH[ManagedHost CRs<br/>inventory + labels + status]
-        MC[ManagedCluster CRs<br/>(optional; for cross-cluster K8s node discovery)]
+        MC["ManagedCluster CRs<br/>optional for cross-cluster K8s node discovery"]
         Secrets[(Kubeconfig Secrets for MC provider)]
-        Ctrl[CentralizedFirewallPolicy Controller<br/>(+ GFP adapter path)<br/>leader-elected Deployment + gRPC server]
+        Ctrl["CentralizedFirewallPolicy Controller<br/>with GFP adapter path<br/>leader-elected Deployment + gRPC server"]
         Compiler[pkg/compiler<br/>select + prioritize + blob generation]
         Reg[Host Registry + gRPC<br/>connection manager]
     end
@@ -111,7 +111,7 @@ graph TD
     subgraph "K8s Nodes (DaemonSet agents)"
         K8sNode1["Node 'eu-prod-k8s-07'<br/>labels: region=eu,env=prod<br/>+ local Pod cache (podIP→labels)"]
         AgentK8s[firewall-agent<br/>DaemonSet<br/>gRPC client + CO-RE loader<br/>XDP/tc + cgroup]
-        EBPFK8s["eBPF progs + maps<br/>(pinned /sys/fs/bpf/firewall/)"]
+        EBPFK8s["eBPF progs + maps<br/>pinned at /sys/fs/bpf/firewall/"]
     end
 
     subgraph "Bare Metal / VMs (standalone agents)"
@@ -136,7 +136,8 @@ graph TD
     AgentBare --> EBPFBare
     Ctrl -.->|create/update/status<br/>ManagedHost| MH
     Ctrl -.->|perHostStatus + applied version| CFP
-    AgentK8s -.->|local pod list/watch<br/>(in-cluster, node-scoped RBAC)| K8s API
+    K8sAPI["Kubernetes API"]
+    AgentK8s -.->|local pod list/watch<br/>in-cluster, node-scoped RBAC| K8sAPI
 
     classDef hub fill:#e3f2fd,stroke:#1976d2
     classDef agent fill:#e8f5e9,stroke:#388e3c
@@ -169,7 +170,7 @@ sequenceDiagram
     participant Compiler
     participant eBPF as eBPF maps (double-buffered)
 
-    User->>HubAPI: apply GlobalFirewallPolicy (subject: pods in nsX; from: CIDR on 443)
+    User->>HubAPI: apply GlobalFirewallPolicy (subject pods in nsX, from CIDR on 443)
     HubAPI->>eBPFCtrl: watch (adapter path for hosts reporting kubernetes-node=true)
     eBPFCtrl->>MH: List matching ManagedHost (labels + kubernetes-node)
     eBPFCtrl->>K8sAgent: (open gRPC stream) Request current pod snapshot for materialization
@@ -205,10 +206,12 @@ sequenceDiagram
     participant CFG as global_config (active_idx + metadata)
     participant Ringbuf as RINGBUF events
     participant NextPacket as Next packet (XDP/tc hook)
+    participant XDP as XDP/tc hook
+    participant CFP
 
     Ctrl->>gRPCStream: PolicyUpdate{version, compiled_blob, defaultAction}
     gRPCStream->>Agent: receive + parse
-    Agent->>InactiveBuf: bpf_map_update_batch (rules in priority order; IPs already materialized)
+    Agent->>InactiveBuf: bpf_map_update_batch (rules in priority order, IPs already materialized)
     Agent->>CFG: prepare new cfg record (active_idx=next, rule_count, version, default)
     Agent->>CFG: write cfg (or the flip u32)
     Note right of CFG: This write is the atomic visibility point for all CPUs
@@ -232,11 +235,11 @@ Covers startup (pinned + last-good), attach options (XDP native vs generic, tc p
 
 ```mermaid
 flowchart TD
-    Start[Agent start<br/>(DaemonSet or systemd)]
+    Start["Agent start<br/>DaemonSet or systemd"]
     Start --> TryPinned[Try load pinned maps/programs<br/>/sys/fs/bpf/firewall/...]
     TryPinned --> HasPinned{Has valid pinned + last_version file?}
     HasPinned -->|yes| Recover[RecoverOnStart()<br/>verify active set + rule_count<br/>enforce last-good immediately]
-    HasPinned -->|no| BootstrapAllow[Enter short bootstrap-allow window<br/>(configurable, or until first policy)]
+    HasPinned -->|no| BootstrapAllow["Enter short bootstrap-allow window<br/>configurable, or until first policy"]
     Recover --> Register[RegisterHost gRPC call<br/>mTLS + labels + bpf_features + kernel + node_uid?]
     BootstrapAllow --> Register
     Register --> Validate{Validate + MH Ready?}
@@ -256,8 +259,10 @@ flowchart TD
     Forward --> PeriodicReport[Periodic + on-change ReportStatus to controller]
     PeriodicReport --> Stream
     Stream -->|new policy or reconnect| Apply
-    Note over MainLoop: Controller outage? → continue enforcing last applied (fail-static)
-    Note over Start: After first successful policy, bootstrap-allow is never re-entered
+    OutageNote["Controller outage?<br/>Continue enforcing last applied (fail-static)"]
+    RestartNote["After first successful policy,<br/>bootstrap-allow is never re-entered"]
+    MainLoop -.-> OutageNote
+    Start -.-> RestartNote
 ```
 
 **Coexistence note (CNI layering)**: For tc attach on K8s nodes, the agent uses a high priority (e.g. 49152 or lower number = earlier) so eBPF host rules run before the CNI's tc programs. XDP (if native) runs even earlier. bpfman (optional) can manage the BpfProgram CR for declarative attach.
@@ -720,10 +725,10 @@ graph TD
     subgraph "eBPF Maps (pinned /sys/fs/bpf/firewall/...)"
         LPM[ingress_lpm_src_v4<br/>LPM_TRIE<br/>key: prefixlen+addr<br/>value: action/index]
         ORD0[ingress_ordered_rules_v4_0<br/>ARRAY (active or shadow)<br/>value: struct rule {prio, action, proto, ports, src/dst ip+prefix}]
-        ORD1[ingress_ordered_rules_v4_1<br/>(double-buf pair)]
+        ORD1["ingress_ordered_rules_v4_1<br/>double-buffer pair"]
         EXACT[exact_five_tuple_v4<br/>HASH<br/>key: 5-tuple<br/>value: action]
         RB[RINGBUF events<br/>{ts,5tuple,action,rule_id}]
-        CFG[global_config<br/>ARRAY[1]<br/>active_idx + default_action + version]
+        CFG["global_config<br/>ARRAY[1]<br/>active_idx + default_action + version"]
         LPM2[egress_* maps ...]
     end
 
@@ -735,11 +740,12 @@ graph TD
 
     XDP & TC & CG -->|lookup active via cfg.active_idx| LPM & ORD0 & ORD1 & EXACT & CFG
     XDP & TC -->|on drop/match| RB
-    CFG -->|atomic flip (single u32 write to active_idx)| ORD0/ORD1 selection
+    Select["ORD0 / ORD1 selection"]
+    CFG -->|atomic flip (single u32 write to active_idx)| Select
 
     classDef map fill:#e1f5fe,stroke:#0277bd
     classDef prog fill:#f3e5f5,stroke:#7b1fa2
-    class LPM,ORD,EXACT,RB,CFG,LPM2 map
+    class LPM,ORD0,ORD1,EXACT,RB,CFG,LPM2,Select map
     class XDP,TC,CG prog
 ```
 
@@ -898,14 +904,14 @@ int firewall_xdp(struct xdp_md *ctx) {
 ```mermaid
 flowchart TD
     Pkt[Packet at XDP/tc hook] --> Parse[Parse eth/ip/tcp-udp<br/>minimal bounds checks]
-    Parse -->|bounds fail| PassErr[XDP_PASS / TC_ACT_OK<br/>(fail static safe)]
-    Parse --> Exact[Hash lookup exact_5tuple<br/>(srcIP,srcPort,dstIP,dstPort,proto)]
+    Parse -->|bounds fail| PassErr["XDP_PASS / TC_ACT_OK<br/>fail static safe"]
+    Parse --> Exact["Hash lookup exact_5tuple<br/>srcIP, srcPort, dstIP, dstPort, proto"]
     Exact -->|hit| Action1[Return action<br/>+ ringbuf sample]
     Exact -->|miss| GetActive[cfg = global_config[0]<br/>active_idx = cfg->active_idx]
     GetActive --> Scan[Iterate active ordered_rules_0 or _1 ARRAY<br/>0..rule_count in priority order]
     Scan --> Match{rule_matches(ip,ports,r)?<br/>explicit prefix_match(src/dst_prefixlen)<br/>+ port range + proto (no LPM here)}
     Match -->|yes first| Action2[Allow/Deny<br/>ringbuf on drop (full event struct)]
-    Match -->|no more| LPMFallback[optional LPM broad tries<br/>(only for pure-CIDR fastpaths)]
+    Match -->|no more| LPMFallback["Optional LPM broad tries<br/>only for pure-CIDR fastpaths"]
     LPMFallback --> Default[Consult cfg->default_action]
     Default --> Action3[Final XDP_PASS / XDP_DROP / TC_ACT_OK / SHOT]
     Action1 & Action2 & Action3 --> Stats[Update per-rule / global counters in maps]
@@ -1176,7 +1182,7 @@ sequenceDiagram
     Reg->>Agent: stream PolicyUpdate{version, blob, default=Deny}
     Agent->>Agent: materialize pod selectors (local cache) → concrete IPs
     Agent->>eBPF: populate inactive map set (LPM + ordered array + exact)
-    Agent->>eBPF: flip global_config.active_idx (atomic; see Atomic Update Code Sketch for full)
+    Agent->>eBPF: flip global_config.active_idx (atomic, see Atomic Update Code Sketch for full)
     Agent->>Reg: ReportStatus(applied_version=...)
     Agent->>eBPF: read ringbuf → log + optional upstream
     Note over Agent,eBPF: On next packet: XDP/tc sees new policy
