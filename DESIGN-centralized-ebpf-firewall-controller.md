@@ -148,6 +148,124 @@ graph TD
 
 Agents connect *outbound* to the controller's gRPC endpoint (ClusterIP or external LB for cross-cluster/baremetal). This works uniformly whether the agent is in the hub cluster, a remote managed cluster, or completely outside Kubernetes. (MC use is optional for K8s node discovery/synth ManagedHosts; primary inventory + policy target is via agent registration + gRPC, not kubeconfig Secrets.)
 
+### Detailed Architecture & Data Flows
+
+To address the need for **more architecture flows** for the eBPF implementation, this section adds concrete, implementation-aligned flows (cross-referenced to the existing packet pseudocode, Atomic Update Code Sketch, `bpf/firewall.bpf.c`, and `pkg/ebpf/loader.go` scaffolding that was started in the monorepo).
+
+These complement the high-level architecture diagram above and the existing map/packet/distribution/registration Mermaids later in the document.
+
+#### 1. GFP Adaptation + Cross-Design Compilation & Materialization Flow (Sibling Integration)
+
+This is the primary integration point with the sibling K8s GFP controller design. A single user-authored `GlobalFirewallPolicy` can drive *both* the CNI policy path (via sibling translator) *and* an early eBPF host-enforcement layer.
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant HubAPI
+    participant eBPFCtrl as eBPF Controller (GFP Adapter + Compiler)
+    participant MH as ManagedHost
+    participant K8sAgent as firewall-agent (K8s node)
+    participant LocalPodCache as Local Pod IP cache
+    participant Compiler
+    participant eBPF as eBPF maps (double-buffered)
+
+    User->>HubAPI: apply GlobalFirewallPolicy (subject: pods in nsX; from: CIDR on 443)
+    HubAPI->>eBPFCtrl: watch (adapter path for hosts reporting kubernetes-node=true)
+    eBPFCtrl->>MH: List matching ManagedHost (labels + kubernetes-node)
+    eBPFCtrl->>K8sAgent: (open gRPC stream) Request current pod snapshot for materialization
+    K8sAgent->>LocalPodCache: node-scoped pod watch (RBAC limited to node)
+    LocalPodCache-->>K8sAgent: {podIP: labels, ...}
+    K8sAgent-->>eBPFCtrl: pod snapshot
+    eBPFCtrl->>Compiler: adapt GFP subject/peers using host labels + pod snapshot
+    Note over Compiler: Central: resolve node/host labels<br/>Agent will later expand podSelector peers to concrete IPs
+    Compiler-->>eBPFCtrl: ordered rule list (priority stable), version, blob (concrete + symbolic selectors)
+    eBPFCtrl->>K8sAgent: PolicyUpdate{version, blob, defaultAction=Deny}
+    K8sAgent->>K8sAgent: finalize materialization (insert /32s for pods at correct priority positions)
+    K8sAgent->>eBPF: populate *inactive* double-buffer set (ordered_rules_0/1, LPM, exact)
+    K8sAgent->>eBPF: write new config (rule_count, default, version_hash)
+    K8sAgent->>eBPF: atomic flip active_idx (single u32 write in global_config)
+    K8sAgent->>eBPFCtrl: ReportStatus(applied_version, mapUtilization, ...)
+    eBPFCtrl->>MH: update perHostStatus
+    Note over eBPF: Next packet at XDP/tc immediately sees the new policy (first-match scan on active set)
+```
+
+The sibling GFP controller can run in parallel and will emit the CNI objects for the same intent. eBPF acts as the "outer" layer.
+
+#### 2. Atomic Policy Update Lifecycle (Control Plane → Data Plane Visibility + Observability)
+
+This expands the distribution sequence with the exact atomic double-buffering mechanics (see also the Atomic Update Code Sketch and the current bpf/firewall.bpf.c implementation).
+
+```mermaid
+sequenceDiagram
+    participant Ctrl
+    participant gRPCStream
+    participant Agent
+    participant InactiveBuf as Inactive map set (_0 or _1)
+    participant ActiveBuf as Active map set
+    participant CFG as global_config (active_idx + metadata)
+    participant Ringbuf as RINGBUF events
+    participant NextPacket as Next packet (XDP/tc hook)
+
+    Ctrl->>gRPCStream: PolicyUpdate{version, compiled_blob, defaultAction}
+    gRPCStream->>Agent: receive + parse
+    Agent->>InactiveBuf: bpf_map_update_batch (rules in priority order; IPs already materialized)
+    Agent->>CFG: prepare new cfg record (active_idx=next, rule_count, version, default)
+    Agent->>CFG: write cfg (or the flip u32)
+    Note right of CFG: This write is the atomic visibility point for all CPUs
+    Agent->>Ringbuf: (optional) emit internal "policy_version_swapped" event
+    Agent->>gRPCStream: ReportStatus(success, applied=version, utilization)
+    Note over ActiveBuf: Programs now dispatch via cfg.active_idx to the new set
+    NextPacket->>XDP: arrive at hook
+    XDP->>CFG: read active_idx
+    XDP->>ActiveBuf: lookup (exact hash → ordered ARRAY scan with prefix_match → LPM fallback → default)
+    XDP->>Ringbuf: on decision (esp. drops) emit full rule_event {ts, 5tuple, action, rule_prio, ifindex}
+    Ringbuf->>Agent: read in dedicated goroutine (rate-limited / sampled)
+    Agent->>Ctrl: forward events (or aggregate into next ReportStatus)
+    Ctrl->>CFP: update perHostStatus + conditions (or GFP adapter status)
+```
+
+This guarantees no packet ever sees a partially-updated policy.
+
+#### 3. Agent eBPF Lifecycle, Attach Modes, Recovery & Event Loop
+
+Covers startup (pinned + last-good), attach options (XDP native vs generic, tc prio for CNI coexistence), recovery even if controller is down, and the continuous event + report loop. Matches the implementation in pkg/ebpf/loader.go + bpf/firewall.bpf.c.
+
+```mermaid
+flowchart TD
+    Start[Agent start<br/>(DaemonSet or systemd)]
+    Start --> TryPinned[Try load pinned maps/programs<br/>/sys/fs/bpf/firewall/...]
+    TryPinned --> HasPinned{Has valid pinned + last_version file?}
+    HasPinned -->|yes| Recover[RecoverOnStart()<br/>verify active set + rule_count<br/>enforce last-good immediately]
+    HasPinned -->|no| BootstrapAllow[Enter short bootstrap-allow window<br/>(configurable, or until first policy)]
+    Recover --> Register[RegisterHost gRPC call<br/>mTLS + labels + bpf_features + kernel + node_uid?]
+    BootstrapAllow --> Register
+    Register --> Validate{Validate + MH Ready?}
+    Validate -->|K8s| AutoApprove[TokenReview + node-name claim → auto Ready]
+    Validate -->|Bare| PendingApproval[MH created with PendingApproval condition]
+    PendingApproval --> Human[Platform/human approves MH → Ready=True]
+    AutoApprove --> Stream[Open/keep bidirectional gRPC stream]
+    Human --> Stream
+    Stream --> FirstPolicy[Receive current PolicyUpdate from controller]
+    FirstPolicy --> Apply[ApplyPolicy: populate inactive, flip active_idx, fsync last_version]
+    Apply --> MainLoop[Start ringbuf reader + stats goroutine]
+    MainLoop --> Hook[Packet hits XDP or tc hook]
+    Hook --> Enforce[Enforce using active maps + prefix_match + priority order]
+    Enforce -->|decision| Emit[emit to ringbuf if sampled or drop]
+    Emit --> ReadRB[Agent reads ringbuf events]
+    ReadRB --> Forward[rate-limit + batch → local logs or upstream to controller]
+    Forward --> PeriodicReport[Periodic + on-change ReportStatus to controller]
+    PeriodicReport --> Stream
+    Stream -->|new policy or reconnect| Apply
+    Note over MainLoop: Controller outage? → continue enforcing last applied (fail-static)
+    Note over Start: After first successful policy, bootstrap-allow is never re-entered
+```
+
+**Coexistence note (CNI layering)**: For tc attach on K8s nodes, the agent uses a high priority (e.g. 49152 or lower number = earlier) so eBPF host rules run before the CNI's tc programs. XDP (if native) runs even earlier. bpfman (optional) can manage the BpfProgram CR for declarative attach.
+
+These flows (plus the existing ones for maps, packet processing, distribution, and registration) give a complete picture for anyone implementing or operating the eBPF controller, agent, and datapath.
+
+The Mermaids above can be turned into professional Excalidraw diagrams using the available excalidraw MCP tools (create_from_mermaid + export) for presentations or the project wiki.
+
 ### Core CRDs (proposed, concrete)
 
 **Group/Version**: `firewall.networking.example.com/v1alpha1` (same as sibling for easy co-existence and future unified views).
