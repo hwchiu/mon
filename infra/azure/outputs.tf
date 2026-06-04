@@ -20,11 +20,13 @@ EOT
 }
 
 output "test_zones" {
+  # Returns *all* 4 logical zones from the design (needed for full ground matrix + Zone CRs).
+  # The "provisioned" field tells you whether we actually created AKS/VMs for it in this run.
   value = {
     for k, v in var.zones : k => {
-      name = v.name
-      cidr = v.cidr
-      vnet = "dfw-${k}-vnet"
+      name        = v.name
+      cidr        = v.cidr
+      provisioned = v.create_aks || (v.create_vms > 0)
     }
   }
 }
@@ -34,7 +36,7 @@ output "next_steps" {
 1. az group list | grep dfw-test
 2. Run: terraform output -raw controller_get_creds   # 1 AKS (dfw-zone-004 / mgmt) for CONTROLLER only
 3. Build & push controller + agent images (Docker Hub or ACR).
-4. Create Zone CRs (use test_zones for the 4 logical CIDRs; only 001/002/004 will have live nodes/VMs).
+4. Create the 4 logical Zone CRs (use test_zones output - it shows all 4 from the design + which ones are actually provisioned with AKS/VMs right now).
 5. Deploy controller to the single Management AKS (dfw-zone-004).
 6. For the 2 VMs (zone-001 and zone-002):
    - They run k3s (single-node) + instructions for Cilium CNI (run /root/install-cilium.sh on the VM after boot).

@@ -31,10 +31,10 @@ kubectl wait --for=condition=Ready node --all --timeout=180s || true
 # Install Cilium CLI (optional but handy)
 CILIUM_CLI_VERSION=$(curl -s https://raw.githubusercontent.com/cilium/cilium-cli/main/stable.txt)
 CLI_ARCH=amd64
-curl -L --fail --remote-name-all https://github.com/cilium/cilium-cli/releases/download/${CILIUM_CLI_VERSION}/cilium-linux-${CLI_ARCH}.tar.gz{,.sha256sum}
-sha256sum --check cilium-linux-${CLI_ARCH}.tar.gz.sha256sum
-sudo tar xzvfC cilium-linux-${CLI_ARCH}.tar.gz /usr/local/bin
-rm cilium-linux-${CLI_ARCH}.tar.gz{,.sha256sum} || true
+curl -L --fail --remote-name-all https://github.com/cilium/cilium-cli/releases/download/$${CILIUM_CLI_VERSION}/cilium-linux-$${CLI_ARCH}.tar.gz{,.sha256sum}
+sha256sum --check cilium-linux-$${CLI_ARCH}.tar.gz.sha256sum
+sudo tar xzvfC cilium-linux-$${CLI_ARCH}.tar.gz /usr/local/bin
+rm cilium-linux-$${CLI_ARCH}.tar.gz{,.sha256sum} || true
 
 # Helm install of Cilium suitable for k3s test (kube-proxy replacement, single node)
 helm repo add cilium https://helm.cilium.io/ || true

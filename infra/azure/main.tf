@@ -109,7 +109,8 @@ resource "azurerm_virtual_network_peering" "mesh" {
   allow_forwarded_traffic      = true
 }
 
-# AKS clusters (controller in zone-004 + one per other zone)
+# AKS clusters - only for zones where create_aks = true (currently only zone-004 / Management for the controller).
+# Other zones are logical only (their CIDRs are still needed for the full 4-zone ground matrix in the design).
 resource "azurerm_kubernetes_cluster" "clusters" {
   for_each = { for k, v in var.zones : k => v if v.create_aks }
 
