@@ -1,0 +1,9 @@
+apiVersion: dfw.example.com/v1alpha1
+kind: Zone
+metadata:
+  name: zone-001
+spec:
+  id: "zone-001"
+  name: "DMZ"
+  cidrs:
+    - "10.1.0.0/16"

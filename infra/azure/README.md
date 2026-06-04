@@ -15,13 +15,19 @@ terraform apply tfplan
 # 2. Get controller creds
 $(terraform output -raw controller_get_creds)
 
-# 3. Login to ACR (username + password from portal or `az acr credential show`)
-az acr login --name <the-acr-name-from-output>
+# 3. Option A: Login to ACR (if using Azure Container Registry)
+# az acr login --name <the-acr-name-from-output>
 
-# 4. (Once images exist) build & push
-# docker build -t <acr>/dfw-controller:latest -f Dockerfile.controller .
-# docker push ...
-# same for agent image (must contain clang/LLVM + the bpf/ C source + the Go agent binary)
+# Option B: Use Docker Hub (recommended, you have DOCKER_HUB_REPO and DOCKER_HUB_TOKEN set in GitHub)
+# Locally (you mentioned logged in on this server):
+# make docker-login   # or: echo "$DOCKER_HUB_TOKEN" | docker login -u "$DOCKER_HUB_REPO" --password-stdin
+# Then build & push:
+# make docker-push-controller docker-push-agent
+# This uses DOCKER_HUB_REPO env var to tag as ${DOCKER_HUB_REPO}/dfw-controller and /dfw-agent
+
+# 4. (Once images exist) If using Docker Hub, images will be at:
+# ${DOCKER_HUB_REPO}/dfw-controller:latest and ${DOCKER_HUB_REPO}/dfw-agent:latest
+# (The GitHub Action .github/workflows/docker-build-push.yml will automatically build & push on main/tags using your secrets)
 
 # 5. Apply sample DFW CRs (Zones with the exact VNet CIDRs from terraform output "test_zones")
 kubectl apply -f ../../config/samples/zones.yaml
@@ -38,7 +44,7 @@ kubectl apply -f ../../config/samples/zones.yaml
 #   -v /var/lib/dfw-agent:/var/lib/dfw-agent \
 #   -e DFW_ZONE=zone-001 \
 #   -e DFW_CONTROLLER=10.4.x.x:9443 \
-#   <acr>/dfw-agent:latest
+#   ${DOCKER_HUB_REPO}/dfw-agent:latest
 
 # 8. Validate using the scenarios in the plan doc (cross zone nc/curl + watch agent ringbuf/logs on both ends).
 ```

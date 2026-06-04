@@ -1,0 +1,12 @@
+# Placeholder for GroundRule or GroundPolicy CRs
+# (detailed in the implementation plan and docs)
+apiVersion: dfw.example.com/v1alpha1
+kind: GroundRule
+metadata:
+  name: example-ground
+spec:
+  fromZone: "zone-002"
+  toZone: "zone-001"
+  ports: "443"
+  protocol: "tcp"
+  action: "allow"

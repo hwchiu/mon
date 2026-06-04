@@ -21,3 +21,31 @@ vendor/
 # OS
 .DS_Store
 Thumbs.db
+
+# Terraform (never commit state or plans)
+**/.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+*tfplan*
+tfplan
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Azure temp / one-off scripts from runs
+infra/azure/aksfix
+infra/azure/final-apply
+infra/azure/finalplan
+infra/azure/newplan
+infra/azure/tfplan
+
+# Agent runtime (last known good, pinned maps, etc.)
+/var/lib/dfw-agent/
+dfw-last-good*
+*.lkp
+
+# Controller local config for dev
+config/dfw-config.yaml

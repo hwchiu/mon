@@ -19,6 +19,9 @@ resource "azurerm_log_analytics_workspace" "laws" {
   retention_in_days   = 30
 }
 
+# Dynamically select a currently supported Kubernetes version in the region
+# Using pinned version from variable for compatibility in this subscription/region
+
 # One VNet + basic NSG + subnets per zone (flat for simplicity + easy peering)
 resource "azurerm_virtual_network" "zones" {
   for_each = var.zones
@@ -124,6 +127,9 @@ resource "azurerm_kubernetes_cluster" "clusters" {
     type = "SystemAssigned"
   }
 
+  # Match existing imported clusters to avoid update errors on OIDC
+  oidc_issuer_enabled = true
+
   network_profile {
     network_plugin = "azure"
     service_cidr   = cidrsubnet(each.value.cidr, 8, 200) # e.g. 10.1.200.0/24 inside the zone cidr
@@ -152,7 +158,7 @@ resource "azurerm_linux_virtual_machine" "agent_vms" {
     for combo in flatten([
       for zk, zv in var.zones : [
         for i in range(zv.create_vms) : {
-          key = "${zk}-vm${i}"
+          key      = "${zk}-vm${i}"
           zone_key = zk
           index    = i
         }
@@ -188,10 +194,10 @@ resource "azurerm_linux_virtual_machine" "agent_vms" {
   }
 
   custom_data = base64encode(templatefile("${path.module}/cloud-init-agent.yaml", {
-    zone_id     = each.value.zone_key
-    zone_name   = var.zones[each.value.zone_key].name
+    zone_id   = each.value.zone_key
+    zone_name = var.zones[each.value.zone_key].name
     # Controller endpoint will be filled post-apply (internal LB or pod IP in mgmt)
-    controller  = "dfw-controller.dfw-system.svc.cluster.local:9443"
+    controller = "dfw-controller.dfw-system.svc.cluster.local:9443"
   }))
 
   depends_on = [azurerm_virtual_network_peering.mesh]
@@ -202,7 +208,7 @@ resource "azurerm_network_interface" "agent_nic" {
     for combo in flatten([
       for zk, zv in var.zones : [
         for i in range(zv.create_vms) : {
-          key = "${zk}-vm${i}"
+          key      = "${zk}-vm${i}"
           zone_key = zk
         }
       ]
@@ -230,7 +236,9 @@ output "controller_cluster_name" {
 }
 
 output "get_controller_kubeconfig" {
-  value = "az aks get-credentials -g ${azurerm_resource_group.main.name} -n ${try(azurerm_kubernetes_cluster.clusters[\"zone-004\"].name, \"dfw-zone-004\")} --overwrite-existing"
+  value = <<EOT
+az aks get-credentials -g ${azurerm_resource_group.main.name} -n ${try(azurerm_kubernetes_cluster.clusters["zone-004"].name, "dfw-zone-004")} --overwrite-existing
+EOT
 }
 
 output "zone_vnet_cidrs" {
@@ -238,5 +246,5 @@ output "zone_vnet_cidrs" {
 }
 
 output "agent_vm_private_ips_hint" {
-  value = "Use 'az vm list-ip-addresses' or the portal to find the private IPs of the agent VMs. They live inside the zone CIDRs."
+  value = "Use az vm list-ip-addresses or the portal to find the private IPs of the agent VMs. They live inside the zone CIDRs."
 }

@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DFW Controller Dashboard</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body { background: #f8fafc; }
+    .section-title { font-size: 1.5rem; font-weight: 700; }
+    .matrix td { text-align: center; cursor: pointer; }
+    .allow { background: #dcfce7; color: #15803d; }
+    .deny { background: #fee2e2; color: #b91c1c; }
+  </style>
+</head>
+<body class="p-4">
+<div class="container">
+  <h1 class="mb-4">DFW Controller <small class="text-muted">Status &amp; Configuration</small></h1>
+
+  <div class="row g-3 mb-4">
+    <div class="col-md-3"><div class="card p-3"><div id="stat-zones">Zones: ...</div></div></div>
+    <div class="col-md-3"><div class="card p-3"><div id="stat-agents">Agents: ...</div></div></div>
+    <div class="col-md-3"><div class="card p-3"><div id="stat-policies">Policies: ...</div></div></div>
+    <div class="col-md-3"><div class="card p-3"><div id="stat-time">Updated: ...</div></div></div>
+  </div>
+
+  <h2 class="section-title">Connected Agents</h2>
+  <table class="table table-sm" id="agents-table">
+    <thead><tr><th>Agent ID</th><th>Zone</th><th>Version</th><th>Healthy</th><th>Last Seen</th></tr></thead>
+    <tbody></tbody>
+  </table>
+
+  <h2 class="section-title mt-4">Current Zones</h2>
+  <table class="table" id="zones-table">
+    <thead><tr><th>ID</th><th>Name</th><th>CIDRs</th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <button class="btn btn-sm btn-primary mb-3" onclick="showCreateZone()">+ Add Zone</button>
+
+  <h2 class="section-title">Ground Rules Matrix</h2>
+  <div class="alert alert-info small">Click cells to toggle allow/deny (will create/update GroundRule). This is a live view from CRs + simulation.</div>
+  <table class="table table-bordered matrix" id="ground-matrix" style="max-width: 700px;"></table>
+
+  <h2 class="section-title mt-4">Zone Rules (Overrides)</h2>
+  <table class="table table-sm" id="zonerules-table">
+    <thead><tr><th>Src</th><th>Dst</th><th>Port</th><th>Direction</th><th>Action</th><th></th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <button class="btn btn-sm btn-primary" onclick="showCreateZoneRule()">+ Add Zone Rule</button>
+
+  <h2 class="section-title mt-4">Recent Policy Versions</h2>
+  <table class="table table-sm" id="policies-table">
+    <thead><tr><th>Version</th><th>Created</th><th>Ground Hash</th></tr></thead>
+    <tbody></tbody>
+  </table>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+async function fetchJSON(url) {
+  const res = await fetch(url);
+  return res.json();
+}
+
+async function loadStatus() {
+  const s = await fetchJSON('/api/status');
+  document.getElementById('stat-zones').textContent = 'Zones: ' + s.zones;
+  document.getElementById('stat-agents').textContent = 'Agents: ' + s.agents;
+  document.getElementById('stat-policies').textContent = 'Policies: ' + s.policy_versions;
+  document.getElementById('stat-time').textContent = 'Updated: ' + new Date(s.timestamp).toLocaleTimeString();
+}
+
+async function loadAgents() {
+  const agents = await fetchJSON('/api/agents');
+  const tbody = document.querySelector('#agents-table tbody');
+  tbody.innerHTML = '';
+  agents.forEach(a => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${a.AgentID}</td><td>${a.ZoneID}</td><td>${a.Version}</td><td>${a.Healthy ? '✅' : '❌'}</td><td>${new Date(a.LastSeen).toLocaleTimeString()}</td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+async function loadZones() {
+  const zones = await fetchJSON('/api/zones');
+  const tbody = document.querySelector('#zones-table tbody');
+  tbody.innerHTML = '';
+  zones.forEach(z => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${z.spec.id}</td><td>${z.spec.name}</td><td>${z.spec.cidrs.join(', ')}</td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+async function loadGroundMatrix() {
+  const zonesRes = await fetchJSON('/api/zones');
+  const zones = zonesRes.map(z => z.spec.id).sort();
+  const rules = await fetchJSON('/api/groundrules');
+
+  const table = document.getElementById('ground-matrix');
+  table.innerHTML = '';
+
+  let header = '<tr><th>From \\ To</th>';
+  zones.forEach(z => header += `<th>${z}</th>`);
+  header += '</tr>';
+  table.innerHTML = header;
+
+  zones.forEach(from => {
+    let row = `<tr><td><strong>${from}</strong></td>`;
+    zones.forEach(to => {
+      let val = 'deny';
+      const match = rules.find(r => r.spec.fromZone === from && r.spec.toZone === to);
+      if (match) val = match.spec.action || 'deny';
+      const cls = val === 'allow' ? 'allow' : 'deny';
+      row += `<td class="${cls}" onclick="toggleGroundRule('${from}','${to}', this)">${val.toUpperCase()}</td>`;
+    });
+    row += '</tr>';
+    table.innerHTML += row;
+  });
+}
+
+async function toggleGroundRule(from, to, cell) {
+  const current = cell.textContent.toLowerCase();
+  const newAction = current === 'allow' ? 'deny' : 'allow';
+  const body = {
+    apiVersion: 'dfw.example.com/v1alpha1',
+    kind: 'GroundRule',
+    metadata: { name: `gr-${from}-${to}`.toLowerCase() },
+    spec: { fromZone: from, toZone: to, ports: 'all', protocol: 'all', action: newAction }
+  };
+  await fetch('/api/groundrules/create', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+  loadGroundMatrix();
+}
+
+async function loadZoneRules() {
+  const rules = await fetchJSON('/api/zonerules');
+  const tbody = document.querySelector('#zonerules-table tbody');
+  tbody.innerHTML = '';
+  rules.forEach(r => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${r.spec.srcZone}</td><td>${r.spec.dstZone}</td><td>${r.spec.ports}</td><td>${r.spec.direction}</td><td>${r.spec.action}</td>
+      <td><button class="btn btn-sm btn-outline-danger" onclick="deleteZoneRule('${r.metadata.name}')">x</button></td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+async function deleteZoneRule(name) {
+  alert('Delete not implemented in this skeleton UI. Use kubectl or extend the /api.');
+}
+
+function showCreateZone() {
+  const id = prompt('Zone ID (e.g. zone-005)');
+  if (!id) return;
+  const name = prompt('Name', id);
+  const cidrs = prompt('CIDRs (comma separated)', '10.5.0.0/16');
+  const body = {
+    apiVersion: 'dfw.example.com/v1alpha1',
+    kind: 'Zone',
+    metadata: { name: id.toLowerCase() },
+    spec: { id, name, cidrs: cidrs.split(',').map(s => s.trim()) }
+  };
+  fetch('/api/zones/create', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)})
+    .then(() => { loadZones(); loadGroundMatrix(); });
+}
+
+function showCreateZoneRule() {
+  const src = prompt('Src Zone ID');
+  const dst = prompt('Dst Zone ID');
+  const port = prompt('Port(s)', 'all');
+  const dir = prompt('Direction (egress/ingress)', 'egress');
+  const body = {
+    apiVersion: 'dfw.example.com/v1alpha1',
+    kind: 'ZoneRule',
+    metadata: { name: `zr-${src}-${dst}`.toLowerCase() },
+    spec: { srcZone: src, dstZone: dst, ports: port, protocol: 'all', direction: dir, action: 'allow' }
+  };
+  fetch('/api/zonerules/create', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)})
+    .then(() => loadZoneRules());
+}
+
+async function loadPolicies() {
+  const pvs = await fetchJSON('/api/policies');
+  const tbody = document.querySelector('#policies-table tbody');
+  tbody.innerHTML = '';
+  pvs.forEach(p => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${p.status.version}</td><td>${new Date(p.status.createdAt).toLocaleString()}</td><td>${p.status.groundHash}</td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+async function refreshAll() {
+  await Promise.all([loadStatus(), loadAgents(), loadZones(), loadGroundMatrix(), loadZoneRules(), loadPolicies()]);
+}
+
+refreshAll();
+setInterval(refreshAll, 10000);
+</script>
+</body>
+</html>

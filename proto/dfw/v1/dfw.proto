@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package dfw.v1;
+
+option go_package = "github.com/hwchiu/mon/pkg/proto/dfw/v1;dfwv1";
+
+// PolicyUpdate is pushed from controller (or zone distributor) to agents.
+message PolicyUpdate {
+  string version = 1;
+  string zone_id = 2;
+  // Serialized map data. In real impl this would be the 4 maps: zone_cidr, policy_rule, verdict, block_stats.
+  bytes map_data = 3;
+  bytes signature = 4; // ed25519 or similar
+}
+
+message RegisterRequest {
+  string agent_id = 1; // e.g. node name or VM id
+  string zone_id = 2;
+  string current_version = 3;
+  repeated string interfaces = 4;
+}
+
+message RegisterResponse {
+  string assigned_zone = 1;
+}
+
+message StatusReport {
+  string agent_id = 1;
+  string version = 2;
+  bool healthy = 3;
+  // Audit samples etc.
+}
+
+service Distribution {
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  rpc StreamUpdates(RegisterRequest) returns (stream PolicyUpdate);
+  rpc ReportStatus(StatusReport) returns (google.protobuf.Empty);
+}

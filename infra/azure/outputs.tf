@@ -4,7 +4,7 @@ output "resource_group" {
 
 output "acr" {
   value = {
-    login_server = azurerm_container_registry.acr.login_server
+    login_server   = azurerm_container_registry.acr.login_server
     admin_username = azurerm_container_registry.acr.admin_username
   }
 }
@@ -14,7 +14,9 @@ output "log_analytics" {
 }
 
 output "controller_get_creds" {
-  value = "az aks get-credentials --resource-group ${azurerm_resource_group.main.name} --name ${try(azurerm_kubernetes_cluster.clusters[\"zone-004\"].name, \"dfw-zone-004\")} --overwrite-existing"
+  value = <<EOT
+az aks get-credentials --resource-group ${azurerm_resource_group.main.name} --name ${try(azurerm_kubernetes_cluster.clusters["zone-004"].name, "dfw-zone-004")} --overwrite-existing
+EOT
 }
 
 output "test_zones" {
@@ -30,7 +32,7 @@ output "test_zones" {
 output "next_steps" {
   value = <<EOT
 1. az group list | grep dfw-test
-2. ${try("az aks get-credentials -g ${azurerm_resource_group.main.name} -n ${azurerm_kubernetes_cluster.clusters[\"zone-004\"].name} --overwrite-existing", "Run the controller_get_creds command")}
+2. Run: terraform output -raw controller_get_creds
 3. Build & push controller + agent images to the ACR above.
 4. Create the 4 Zone CRs using the exact CIDRs shown in test_zones.
 5. Deploy controller Helm chart to the Management AKS.

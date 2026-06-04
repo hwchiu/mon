@@ -1,0 +1,25 @@
+version: '3.8'
+services:
+  dfw-controller:
+    build:
+      context: .
+      dockerfile: Dockerfile.controller
+    image: ${DOCKER_HUB_REPO:-local}/dfw-controller:latest
+    ports:
+      - "9443:9443"
+      - "8080:8080"
+      - "8081:8081"
+      - "8082:8082"  # frontend status + DFW config UI
+    environment:
+      - DFW_MODE=controller
+    # For local test only; real uses K8s
+
+  # Agent example (note: eBPF requires host + privileged, limited in compose)
+  # dfw-agent:
+  #   build: {context: ., dockerfile: Dockerfile.agent}
+  #   image: ${DOCKER_HUB_REPO:-local}/dfw-agent:latest
+  #   privileged: true
+  #   network_mode: host
+  #   pid: host
+  #   volumes:
+  #     - /sys/fs/bpf:/sys/fs/bpf

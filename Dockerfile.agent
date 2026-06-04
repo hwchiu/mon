@@ -1,0 +1,23 @@
+# Agent image - includes clang/LLVM for runtime eBPF compilation at boot (data-driven design)
+FROM golang:1.22-bookworm AS builder
+WORKDIR /workspace
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -a -o agent ./cmd/dfw-agent
+
+# Runtime with LLVM for on-boot compile of bpf/dfw.bpf.c
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    clang llvm libbpf-dev ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+# Note: For compiling the eBPF C at runtime you may need kernel headers for the target kernel
+# (e.g. mount /lib/modules or install linux-headers-generic). For many modern kernels with BTF this may not be required.
+
+WORKDIR /app
+COPY --from=builder /workspace/agent /app/agent
+# Ship the eBPF C source so agent can compile it at boot
+COPY bpf/ /app/bpf/
+
+# In real deployment the agent will be run with the required caps and host mounts
+ENTRYPOINT ["/app/agent"]

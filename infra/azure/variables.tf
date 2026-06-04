@@ -57,7 +57,7 @@ variable "zones" {
 
 variable "kubernetes_version" {
   type    = string
-  default = "1.29"
+  default = "1.34"
 }
 
 variable "vm_size" {
@@ -67,5 +67,5 @@ variable "vm_size" {
 
 variable "controller_vm_size" {
   type    = string
-  default = "Standard_D2s_v5"
+  default = "Standard_D2_v4"
 }

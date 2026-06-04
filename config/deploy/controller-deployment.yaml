@@ -1,0 +1,99 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dfw-controller
+  namespace: dfw-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: dfw-controller
+rules:
+- apiGroups: ["dfw.example.com"]
+  resources: ["zones", "groundrules", "zonerules", "policyversions"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: [""]
+  resources: ["configmaps", "secrets"]
+  verbs: ["get", "list", "watch", "create", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: dfw-controller
+subjects:
+- kind: ServiceAccount
+  name: dfw-controller
+  namespace: dfw-system
+roleRef:
+  kind: ClusterRole
+  name: dfw-controller
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dfw-controller
+  namespace: dfw-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dfw-controller
+  template:
+    metadata:
+      labels:
+        app: dfw-controller
+    spec:
+      serviceAccountName: dfw-controller
+      containers:
+      - name: manager
+        image: ${DOCKER_HUB_REPO:-your-dockerhub}/dfw-controller:latest  # populated by envsubst in deploy scripts
+        ports:
+        - containerPort: 9443
+          name: grpc
+        - containerPort: 8080
+          name: metrics
+        - containerPort: 8081
+          name: health
+        - containerPort: 8082
+          name: ui
+          protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8081
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        resources:
+          limits:
+            cpu: 500m
+            memory: 256Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dfw-controller
+  namespace: dfw-system
+spec:
+  selector:
+    app: dfw-controller
+  ports:
+  - port: 9443
+    targetPort: 9443
+    name: grpc
+  - port: 8080
+    targetPort: 8080
+    name: metrics
+  - port: 8082
+    targetPort: 8082
+    name: ui
+    protocol: TCP

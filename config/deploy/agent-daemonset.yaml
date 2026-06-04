@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: dfw-agent
+  namespace: dfw-system
+spec:
+  selector:
+    matchLabels:
+      app: dfw-agent
+  template:
+    metadata:
+      labels:
+        app: dfw-agent
+    spec:
+      hostNetwork: true   # often needed for host interfaces
+      hostPID: true
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+      - name: agent
+        image: ${DOCKER_HUB_REPO:-your-dockerhub}/dfw-agent:latest
+        securityContext:
+          privileged: true
+          capabilities:
+            add: ["NET_ADMIN", "BPF", "SYS_ADMIN", "SYS_RESOURCE"]
+        env:
+        - name: DFW_ZONE
+          value: "zone-XXX"   # set per zone via node selector or init
+        - name: DFW_CONTROLLER
+          value: "dfw-controller.dfw-system.svc.cluster.local:9443"
+        - name: DFW_INTERFACES
+          value: "eth0"   # adjust to your host interfaces (not CNI ones)
+        volumeMounts:
+        - name: bpf
+          mountPath: /sys/fs/bpf
+          mountPropagation: Bidirectional
+        - name: modules
+          mountPath: /lib/modules
+          readOnly: true
+        resources:
+          limits:
+            cpu: "1"
+            memory: 512Mi
+      volumes:
+      - name: bpf
+        hostPath:
+          path: /sys/fs/bpf
+          type: DirectoryOrCreate
+      - name: modules
+        hostPath:
+          path: /lib/modules
+          type: Directory
+      tolerations:
+      - operator: Exists
+      nodeSelector:
+        # Add labels per zone, e.g. dfw-zone: zone-001
+        # Or use affinity
