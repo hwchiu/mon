@@ -177,6 +177,7 @@
         <li class="nav-item"><a class="nav-link" href="#policy">Policy Rules</a></li>
         <li class="nav-item"><a class="nav-link" href="#engine">Policy Engine</a></li>
         <li class="nav-item"><a class="nav-link" href="#propagation">Propagation</a></li>
+        <li class="nav-item"><a class="nav-link" href="#agent">Agent</a></li>
       </ul>
     </div>
   </div>
@@ -1055,6 +1056,220 @@ flowchart TD
             <li class="mb-1">Fail-safe: agents retain last-known-good policy on failure</li>
             <li>DFW runs before user policies in the network stack (outer security layer)</li>
           </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════ AGENT ════════════════════════════════ -->
+<section id="agent">
+  <div class="container">
+    <div class="text-center mb-5">
+      <span class="section-label">End-Device Agent</span>
+      <h2 class="section-title">Kernel-Level Enforcement</h2>
+      <p class="section-subtitle">
+        A lightweight agent that compiles eBPF programs once at boot, then enforces
+        centrally-distributed map data at the kernel level on every inter-zone packet —
+        with zero knowledge of CNIs, pods, or overlay networks.
+      </p>
+    </div>
+
+    <!-- 8.1 Overview -->
+    <div class="row g-4 mb-5">
+      <div class="col-md-4">
+        <div class="pillar-card h-100">
+          <div class="pillar-icon bg-blue-soft"><i class="fas fa-ethernet"></i></div>
+          <h5 class="fw-bold">Interface-Scoped</h5>
+          <p class="text-muted mb-0">
+            Enforcement is limited to admin-specified host interfaces (e.g. <code>eth0</code>, <code>bond0</code>).
+            CNI-specific interfaces (<code>cilium_xxx</code>, <code>cni0</code>, …) are never touched.
+          </p>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="pillar-card h-100">
+          <div class="pillar-icon bg-orange-soft"><i class="fas fa-arrows-left-right"></i></div>
+          <h5 class="fw-bold">Inter-Zone Only</h5>
+          <p class="text-muted mb-0">
+            Only traffic crossing zone CIDR boundaries is in scope.
+            Zone-internal traffic (same CIDR), pod-to-pod within a cluster, and overlay-internal
+            frames (VXLAN, …) are out of scope.
+          </p>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="pillar-card h-100">
+          <div class="pillar-icon bg-cyan-soft"><i class="fas fa-microchip"></i></div>
+          <h5 class="fw-bold">Self-Compiling</h5>
+          <p class="text-muted mb-0">
+            Ships with C source code and an LLVM toolchain for on-the-fly eBPF compilation
+            at boot. No pre-built bytecode required — kernel updates never cause compatibility issues.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <!-- 8.2 Deployment + 8.3 Privileges -->
+    <div class="row g-4 mb-5">
+      <div class="col-lg-6">
+        <span class="section-label">8.2 Deployment</span>
+        <h3 class="section-title" style="font-size:1.5rem;">How Agents Are Deployed</h3>
+        <div class="row g-3">
+          <div class="col-12">
+            <div class="pillar-card" style="border-left: 4px solid var(--primary);">
+              <h6 class="fw-bold"><i class="fab fa-docker me-2 text-primary"></i>Kubernetes (DaemonSet)</h6>
+              <p class="text-muted mb-0 small">
+                Deployed as a privileged DaemonSet pod with the required capabilities
+                (<code>NET_ADMIN</code>, <code>BPF</code>, <code>SYS_ADMIN</code>, <code>SYS_RESOURCE</code>).
+                Runs on every node in the target zone.
+              </p>
+            </div>
+          </div>
+          <div class="col-12">
+            <div class="pillar-card" style="border-left: 4px solid #16a34a;">
+              <h6 class="fw-bold"><i class="fas fa-server me-2 text-success"></i>VM / Bare-Metal (Podman)</h6>
+              <p class="text-muted mb-0 small">
+                Run with Podman, configured via environment variables, with a persistent
+                volume for the compiled eBPF program and last-known-good policy state.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-lg-6">
+        <span class="section-label">8.3 Required Privileges</span>
+        <h3 class="section-title" style="font-size:1.5rem;">Linux Capabilities</h3>
+        <div class="table-responsive dfw-table">
+          <table class="table table-hover mb-0">
+            <thead><tr><th>Capability</th><th>Purpose</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><code>NET_ADMIN</code></td>
+                <td>Attach eBPF programs to tc qdiscs on network interfaces</td>
+              </tr>
+              <tr>
+                <td><code>BPF</code></td>
+                <td>Create, load, and manage eBPF programs and maps</td>
+              </tr>
+              <tr>
+                <td><code>SYS_ADMIN</code></td>
+                <td>Mount the BPF filesystem for persistent eBPF map storage</td>
+              </tr>
+              <tr>
+                <td><code>SYS_RESOURCE</code></td>
+                <td>Override <code>RLIMIT_MEMLOCK</code> for large eBPF maps</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- 8.4 Internal components -->
+    <div class="mb-5">
+      <span class="section-label">8.4 Internal Components</span>
+      <h3 class="section-title" style="font-size:1.5rem;">Agent Architecture</h3>
+      <div class="mermaid-wrap">
+        <pre class="mermaid">
+graph TD
+    subgraph Agent["🤖 End-Device Agent"]
+        UC["📡 Upstream Connector\nReceives map data from controller"]
+        SIG["🔐 Signature Verifier\nVerifies digital signature + version"]
+        VM["🏷️ Version Manager\nTracks current & previous versions"]
+        MDP["🗂️ Map Data Processor\nAtomically updates eBPF maps"]
+        LLVM["⚙️ LLVM Compiler\nC source → eBPF bytecode (boot-time only)"]
+        EP["🔧 eBPF Program\nData-driven packet verdict engine"]
+        TC["🔗 tc-BPF Attachment\nAttaches programs to host interfaces"]
+        AL["📝 Audit Logger\nLogs blocked / matched packets"]
+        IF["🔌 Interface Filter\nAdmin-specified interfaces only"]
+        MAPS[("🗄️ eBPF Maps\nzone_cidr · policy_rule\nverdict · block_stats")]
+    end
+
+    UC --> SIG --> VM --> MDP --> MAPS
+    LLVM --> EP
+    EP --> TC --> IF
+    MAPS --> EP
+    EP --> AL
+        </pre>
+      </div>
+    </div>
+
+    <!-- 8.5 Policy application flow -->
+    <div class="mb-5">
+      <span class="section-label">8.5 Policy Application Flow</span>
+      <h3 class="section-title" style="font-size:1.5rem;">5-Step Apply Sequence</h3>
+      <div class="row justify-content-center">
+        <div class="col-lg-9">
+          <ol class="step-list">
+            <li>
+              <div class="step-num">1</div>
+              <div class="step-body">
+                <h6>Receive</h6>
+                <p class="text-muted mb-0">Agent receives map data from the Distribution Channel via the Upstream Connector.</p>
+              </div>
+            </li>
+            <li>
+              <div class="step-num">2</div>
+              <div class="step-body">
+                <h6>Verify</h6>
+                <p class="text-muted mb-0">Validates the digital signature and checks whether the version is newer than the currently running one. Stale or tampered updates are discarded.</p>
+              </div>
+            </li>
+            <li>
+              <div class="step-num">3</div>
+              <div class="step-body">
+                <h6>Update Maps</h6>
+                <p class="text-muted mb-0">Atomically swaps eBPF map contents using the double-buffer technique (<code>active_idx</code> flip). No bytecode reload — only data changes.</p>
+              </div>
+            </li>
+            <li>
+              <div class="step-num">4</div>
+              <div class="step-body">
+                <h6>Enforce</h6>
+                <p class="text-muted mb-0">The data-driven eBPF program reads the updated maps on each incoming/outgoing packet and returns an instant ALLOW or DENY verdict at the kernel level.</p>
+              </div>
+            </li>
+            <li>
+              <div class="step-num">5</div>
+              <div class="step-body">
+                <h6>Report</h6>
+                <p class="text-muted mb-0">Sends the new version confirmation, health status, and audit log entries back to the controller (read-only upstream feedback).</p>
+              </div>
+            </li>
+          </ol>
+        </div>
+      </div>
+    </div>
+
+    <!-- 8.6 Enforcement scope -->
+    <div>
+      <span class="section-label">8.6 Enforcement Scope</span>
+      <h3 class="section-title" style="font-size:1.5rem;">What the Agent Enforces</h3>
+      <div class="row g-4">
+        <div class="col-md-6">
+          <div class="card border-0 h-100" style="background:#f0fdf4; border-radius:16px; padding:1.75rem;">
+            <h5 class="fw-bold mb-3" style="color:#15803d;"><i class="fas fa-circle-check me-2"></i>In Scope</h5>
+            <ul class="mb-0 text-muted" style="line-height:2;">
+              <li>Inter-zone traffic on admin-specified host interfaces</li>
+              <li>Host-level source / destination IPs</li>
+              <li>Traffic crossing zone CIDR boundaries</li>
+              <li>Audit logging of blocked / matched packets</li>
+            </ul>
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="card border-0 h-100" style="background:#fef2f2; border-radius:16px; padding:1.75rem;">
+            <h5 class="fw-bold mb-3" style="color:#b91c1c;"><i class="fas fa-circle-xmark me-2"></i>Out of Scope</h5>
+            <ul class="mb-0 text-muted" style="line-height:2;">
+              <li>Zone-internal traffic (same CIDR)</li>
+              <li>Pod-to-pod traffic within a K8s cluster</li>
+              <li>User-defined network policies</li>
+              <li>Overlay network internal traffic (VXLAN, Geneve, …)</li>
+              <li>CNI-specific interfaces (<code>cilium_xxx</code>, <code>cni0</code>, …)</li>
+            </ul>
+          </div>
         </div>
       </div>
     </div>
