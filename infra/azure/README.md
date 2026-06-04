@@ -1,14 +1,15 @@
 # Azure DFW Test Environment (Terraform) - Simplified
 
-**Current topology (adjusted per request):** 1 AKS cluster (controller / management only, zone-004) + 2 Ubuntu VMs (zone-001 "DMZ" and zone-002 "Internal").
+**Current topology (as requested):** 
 
-- The VMs are provisioned with:
-  - Podman (for standalone "VM agent" path using the dfw-agent container).
-  - k3s (single-node lightweight K8s) pre-installed with instructions + helper script to install Cilium CNI (`/root/install-cilium.sh`).
-- This lets us test:
-  - The Podman/VM agent path on bare Linux hosts whose IPs fall into the zone CIDRs.
-  - "K8s with Cilium" path: deploy the agent DaemonSet *inside* the small k3s on the VM (hostNetwork + privileged + /sys/fs/bpf mount) while Cilium handles pod networking. DFW only attaches to the admin-specified host iface (eth0), proving coexistence (does not touch cilium_* veths or CNI interfaces).
-- Logical 4 zones still supported via Zone CR `cidrs` (the other two zones can be empty or simulated later with more VMs).
+- **1 AKS cluster**: Runs *only* the DFW controller (placed in zone-004 / Management).
+- **Other VMs**: For installing and running the agents (placed in zone-001 and zone-002).
+
+The VMs are the environment where you install/run `dfw-agent` (primarily the standalone Podman path using `vm-agent-example.sh` or as a systemd service).
+
+As mentioned earlier for "k8s with cilium configuration", the cloud-init on the VMs also includes optional k3s bootstrap + a `/root/install-cilium.sh` helper. This lets you test deploying the agent *as a DaemonSet inside k8s* (on the VM) while DFW protects only the specified host interface (proving clean coexistence with Cilium).
+
+You declare the logical zones via `Zone` CRs using the CIDRs of the provisioned subnets/VMs. The full 4-zone design matrix can be used by creating the extra Zone CRs (and adding more VMs if needed).
 
 See the full plan: `../../docs/plans/2026-06-04-azure-dfw-test-environment.md`
 

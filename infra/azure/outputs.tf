@@ -34,17 +34,14 @@ output "test_zones" {
 output "next_steps" {
   value = <<EOT
 1. az group list | grep dfw-test
-2. Run: terraform output -raw controller_get_creds   # 1 AKS (dfw-zone-004 / mgmt) for CONTROLLER only
-3. Build & push controller + agent images (Docker Hub or ACR).
-4. Create the 4 logical Zone CRs (use test_zones output - it shows all 4 from the design + which ones are actually provisioned with AKS/VMs right now).
-5. Deploy controller to the single Management AKS (dfw-zone-004).
-6. For the 2 VMs (zone-001 and zone-002):
-   - They run k3s (single-node) + instructions for Cilium CNI (run /root/install-cilium.sh on the VM after boot).
-   - Also have Podman pre-installed for the standalone "VM agent" path.
-   - SSH to VM, get k3s kubeconfig: scp azureuser@<vm-ip>:/etc/rancher/k3s/k3s.yaml ./k3s-001.yaml (fix server IP if needed).
-   - Then you can kubectl apply -f agent-daemonset.yaml (with ZONE=zone-001) into that k3s for "K8s + Cilium coexistence" test.
-   - Or use the podman path: bash vm-agent-example.sh zone-001 <controller-ip>:9443
-7. Apply ground + zone rules from docs/index.html (the 4x4 matrix).
-8. Test: cross-zone traffic (VM1 <-> VM2, VM <-> AKS nodes, hostNet pods), check DFW drops/allows, ringbuf on agents, frontend UI on controller :8082.
+2. Run: terraform output -raw controller_get_creds   # ONLY 1 AKS (dfw-zone-004) for the CONTROLLER
+3. Build & push images.
+4. Create Zone CRs using CIDRs from "terraform output test_zones" (defines the zones we actually provision: 001+002 for agent VMs, 004 for controller AKS).
+5. Deploy controller to the single AKS.
+6. On the VMs ("other VMs which install the agents"):
+   - Primary: use the Podman path → bash vm-agent-example.sh <zone> <controller-ip>:9443
+   - Optional (for k8s + Cilium coexistence test, as mentioned earlier): VMs have k3s pre-installed. After boot run /root/install-cilium.sh, copy k3s kubeconfig from the VM, then deploy agent-daemonset.yaml into that small k3s (set the ZONE env correctly). DFW agent protects the host eth0 while Cilium handles the pods.
+7. Apply ground + zone rules (design matrix).
+8. Test cross "zone" traffic between the VMs and to the controller AKS. Inspect agent behavior + use controller UI (:8082).
 EOT
 }

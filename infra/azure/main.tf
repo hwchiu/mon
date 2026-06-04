@@ -22,9 +22,11 @@ resource "azurerm_log_analytics_workspace" "laws" {
 # Dynamically select a currently supported Kubernetes version in the region
 # Using pinned version from variable for compatibility in this subscription/region
 
-# VNets/subnets/NSG only for "active" zones (those with AKS or VMs requested).
-# With current defaults: zone-001 (1 VM), zone-002 (1 VM), zone-004 (controller AKS).
-# This avoids provisioning unnecessary resources for a 1-controller-AKS + 2-VM test env.
+# VNets/subnets/NSG only for zones that actually get resources.
+# Current defaults (per request): 
+#   - zone-004: 1 AKS (controller only)
+#   - zone-001 and zone-002: 1 VM each (for installing/running the agents)
+# No zone-003 by default (add it manually if you want the full 4-zone design matrix with extra VMs).
 locals {
   active_zones = { for k, v in var.zones : k => v if v.create_aks || (v.create_vms > 0) }
   zone_keys    = keys(local.active_zones)

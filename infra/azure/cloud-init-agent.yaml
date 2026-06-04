@@ -1,4 +1,8 @@
 #cloud-config
+# This VM is for installing/running DFW agents (as requested: 1 AKS for controller, VMs for agents).
+# - Primary: Podman + config for standalone dfw-agent container.
+# - Bonus (for "k8s with cilium" coexistence testing): also bootstraps k3s + provides install-cilium.sh
+#   so you can run the agent DaemonSet inside a small k3s on this VM.
 package_update: true
 packages:
   - podman
@@ -8,7 +12,6 @@ packages:
   - iproute2
   - tcpdump
   - hping3   # for crafted packets if available
-  - helm     # for Cilium later (may come from repo)
 
 runcmd:
   - mkdir -p /etc/dfw-agent /var/lib/dfw-agent /sys/fs/bpf
@@ -52,10 +55,8 @@ echo "Cilium install attempted. Use: cilium status --wait; kubectl get pods -n k
 CILIUM_EOF
   - chmod +x /root/install-cilium.sh
 
-  - echo "Agent VM for zone ${zone_name} ready." > /etc/motd
-  - echo " - Podman agent: podman run ... (see vm-agent-example.sh)" >> /etc/motd
-  - echo " - k3s (Cilium): kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes" >> /etc/motd
-  - echo " - Install Cilium CNI for k8s test: /root/install-cilium.sh (run after ~1-2min)" >> /etc/motd
-  - echo " - Then you can deploy DFW agent DaemonSet into this k3s (hostNetwork + privileged + bpf mount) to test coexistence (DFW only on eth0, not cilium_*)." >> /etc/motd
+  - echo "Agent VM for zone ${zone_name} ready (for installing DFW agents)." > /etc/motd
+  - echo " - Main (standalone agents): use vm-agent-example.sh or podman run (see config/deploy/)" >> /etc/motd
+  - echo " - Optional k8s path (Cilium coexistence): k3s is set up. Run /root/install-cilium.sh, then deploy agent-daemonset into this VM's k3s." >> /etc/motd
   - logger "DFW test VM cloud-init complete for zone ${zone_id}"
 
