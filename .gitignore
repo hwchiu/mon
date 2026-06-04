@@ -49,3 +49,7 @@ dfw-last-good*
 
 # Controller local config for dev
 config/dfw-config.yaml
+
+# git worktrees (per superpowers skills for isolated plan execution)
+.worktrees/
+worktrees/
