@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Design Review | DFW — Distributed Firewall</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet" />
+  <style>
+    :root {
+      --primary:   #2563eb;
+      --primary-d: #1d4ed8;
+      --accent:    #06b6d4;
+      --danger:    #ef4444;
+      --success:   #22c55e;
+      --dark:      #0f172a;
+      --mid:       #1e293b;
+      --muted:     #64748b;
+      --surface:   #f8fafc;
+    }
+    html { scroll-behavior: smooth; }
+    body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--surface); color: #1e293b; }
+    section { padding: 60px 0; }
+    section:nth-child(even) { background: #fff; }
+    #mainNav {
+      background: rgba(15,23,42,.95);
+      backdrop-filter: blur(8px);
+      border-bottom: 1px solid rgba(255,255,255,.08);
+    }
+    #mainNav .nav-link { font-size: .85rem; letter-spacing: .04em; color: #94a3b8 !important; transition: color .2s; }
+    #mainNav .nav-link:hover, #mainNav .nav-link.active { color: #38bdf8 !important; }
+    .navbar-brand { font-weight: 700; font-size: 1.25rem; color: #38bdf8 !important; letter-spacing: .06em; }
+    .section-title { font-size: 2rem; font-weight: 800; margin-bottom: .5rem; letter-spacing: -.02em; }
+    .section-subtitle { color: var(--muted); margin-bottom: 2rem; }
+    .section-label { display: inline-block; font-size: .75rem; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--primary); margin-bottom: .5rem; }
+    .pillar-card {
+      border: none; border-radius: 16px; padding: 2rem;
+      box-shadow: 0 1px 3px rgba(0,0,0,.08), 0 8px 24px rgba(0,0,0,.06);
+      height: 100%; transition: transform .2s, box-shadow .2s;
+    }
+    .pillar-card:hover { transform: translateY(-4px); box-shadow: 0 8px 32px rgba(0,0,0,.12); }
+    footer { background: var(--dark); color: #64748b; padding: 2.5rem 0; font-size: .88rem; }
+    footer a { color: #38bdf8; text-decoration: none; }
+  </style>
+</head>
+<body>
+
+<nav id="mainNav" class="navbar navbar-expand-lg fixed-top">
+  <div class="container">
+    <a class="navbar-brand" href="index.html">
+      <i class="fas fa-shield-halved me-2"></i>DFW
+    </a>
+    <button class="navbar-toggler border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navMenu">
+      <span class="navbar-toggler-icon"></span>
+    </button>
+    <div class="collapse navbar-collapse" id="navMenu">
+      <ul class="navbar-nav ms-auto gap-1">
+        <li class="nav-item"><a class="nav-link" href="index.html">Home</a></li>
+        <li class="nav-item"><a class="nav-link" href="index.html#architecture">Architecture</a></li>
+        <li class="nav-item"><a class="nav-link" href="implementation.html">Implementation</a></li>
+        <li class="nav-item"><a class="nav-link" href="test-environment.html">Test Env</a></li>
+        <li class="nav-item"><a class="nav-link active" href="review.html">Review</a></li>
+      </ul>
+    </div>
+  </div>
+</nav>
+
+<section style="padding-top: 120px; padding-bottom: 30px; background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 100%); color: #fff;">
+  <div class="container text-center">
+    <div style="background: rgba(239,68,68,.15); border: 1px solid rgba(239,68,68,.4); color: #ef4444; display: inline-block; border-radius: 999px; padding: .35rem 1rem; font-size: .82rem; font-weight: 600; margin-bottom: 1rem;">
+      <i class="fas fa-search me-1"></i>Independent Review
+    </div>
+    <h1 class="display-5 fw-bold">Design Review</h1>
+    <p class="lead" style="max-width: 680px; margin: 0 auto; color: #94a3b8;">
+      Senior network engineer + SDN controller architect perspective on the current DFW design.
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="container">
+    <div class="mb-5">
+      <p class="lead">
+        The zone-centric dual-consent model and data-driven eBPF approach are strong. This review surfaces the networking, cloud, and operational details that are easy to miss in the first clean architecture pass.
+      </p>
+    </div>
+
+    <div class="row g-4">
+      <div class="col-lg-6">
+        <div class="pillar-card h-100">
+          <h5 class="fw-bold text-danger"><i class="fas fa-exclamation-triangle me-2"></i>Top Gaps &amp; Risks</h5>
+          <ol class="small">
+            <li><strong>Bidirectional / Return Path Semantics</strong><br>
+              Stateless design means return packets (SYN-ACKs, data, FINs) are evaluated as new flows. The current matrix examples do not show the four entries typically required for a working TCP session.</li>
+            <li><strong>Zone CIDR vs Real IPs (Node / Pod / Overlay)</strong><br>
+              "Host-level source/destination IPs" + "every IP belongs to one zone" is clear in intent, but how pod CIDRs are folded in (especially Azure CNI overlay) is under-specified.</li>
+            <li><strong>verdict_map Scalability &amp; Port Handling</strong><br>
+              Direct (src_zone, dst_zone, port) lookup works for small cases but will explode with ranges or "all ports". Need clear strategy for wildcards + fallback to ordered scan.</li>
+            <li><strong>tc-BPF Attach Ordering &amp; Coexistence</strong><br>
+              Must run before CNI and host firewall. No concrete priority numbers, no logging of existing filters, no documented interaction with Azure accelerated networking.</li>
+            <li><strong>Distribution at Real Scale</strong><br>
+              "Zone-X Distributor" is drawn but not designed. A single central gRPC pod will not comfortably handle thousands of persistent agent streams.</li>
+          </ol>
+        </div>
+      </div>
+
+      <div class="col-lg-6">
+        <div class="pillar-card h-100">
+          <h5 class="fw-bold text-success"><i class="fas fa-check-circle me-2"></i>Priority Recommendations</h5>
+          <ul class="small">
+            <li>Add explicit "full TCP session" examples (forward + return) and a <code>symmetric: true</code> helper in ZoneRule / engine.</li>
+            <li>Document exactly what must be in a Zone's <code>cidrs</code> for different CNI modes (and make the Azure test env prove it).</li>
+            <li>Define the eBPF map key structs and compiler emission rules (verdict vs policy_rule scan) before writing the C program.</li>
+            <li>Hard-code safe tc priorities in the agent and log <code>tc filter show</code> on the protected interfaces at startup.</li>
+            <li>Use the Azure multi-VNet test environment as the primary vehicle to validate the dual-consent model and propagation SLA under real conditions.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="mt-4 p-4 bg-white rounded-3 border">
+      <h6 class="fw-bold">Other Notable Areas</h6>
+      <div class="row small text-muted">
+        <div class="col-md-6">
+          <ul>
+            <li>Azure platform realities (NSG interaction, UDR/Firewall source IP rewriting, kernel matrix on AKS nodes)</li>
+            <li>Ground vs Zone rule governance &amp; RBAC delegation</li>
+            <li>Low-level eBPF details (LPM layout, ringbuf payload, pinning, fragments/ICMP)</li>
+          </ul>
+        </div>
+        <div class="col-md-6">
+          <ul>
+            <li>Testing strategy (how do we actually prove "both sides" with observable ringbuf events from src + dst agents?)</li>
+            <li>Operational runbooks (breakglass, partial rollout asymmetry, key rotation)</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="text-center mt-5">
+      <a href="REVIEW-sdn-network-engineer.md" class="btn btn-lg btn-outline-danger" target="_blank">
+        <i class="fas fa-file-alt me-2"></i>Read the Full Design Review Document
+      </a>
+      <a href="https://github.com/hwchiu/mon/blob/main/docs/REVIEW-sdn-network-engineer.md" class="btn btn-lg btn-outline-secondary ms-2" target="_blank">View on GitHub</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container text-center">
+    <div class="mb-2">
+      <i class="fas fa-shield-halved me-2"></i>
+      <strong class="text-light">DFW — Distributed Firewall</strong>
+    </div>
+    <p class="mb-1 small">
+      <a href="index.html" class="text-light">Home</a> ·
+      <a href="implementation.html" class="text-light">Implementation</a> ·
+      <a href="test-environment.html" class="text-light">Test Env</a> ·
+      <a href="review.html" class="text-light">Review</a>
+    </p>
+    <p class="mb-0" style="font-size:.78rem; color: #64748b;">
+      Served via GitHub Pages • <a href="https://github.com/hwchiu/mon" class="text-light">github.com/hwchiu/mon</a>
+    </p>
+  </div>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

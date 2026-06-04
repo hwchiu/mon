@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Implementation Plan | DFW — Distributed Firewall</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet" />
+  <style>
+    :root {
+      --primary:   #2563eb;
+      --primary-d: #1d4ed8;
+      --accent:    #06b6d4;
+      --danger:    #ef4444;
+      --success:   #22c55e;
+      --dark:      #0f172a;
+      --mid:       #1e293b;
+      --muted:     #64748b;
+      --surface:   #f8fafc;
+    }
+
+    /* ── Base ── */
+    html { scroll-behavior: smooth; }
+    body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--surface); color: #1e293b; }
+    section { padding: 80px 0; }
+    section:nth-child(even) { background: #fff; }
+
+    /* ── Navbar ── */
+    #mainNav {
+      background: rgba(15,23,42,.95);
+      backdrop-filter: blur(8px);
+      border-bottom: 1px solid rgba(255,255,255,.08);
+    }
+    #mainNav .nav-link { font-size: .85rem; letter-spacing: .04em; color: #94a3b8 !important; transition: color .2s; }
+    #mainNav .nav-link:hover, #mainNav .nav-link.active { color: #38bdf8 !important; }
+    .navbar-brand { font-weight: 700; font-size: 1.25rem; color: #38bdf8 !important; letter-spacing: .06em; }
+
+    /* ── Section headings ── */
+    .section-title {
+      font-size: 2rem; font-weight: 800; margin-bottom: .5rem;
+      letter-spacing: -.02em;
+    }
+    .section-subtitle { color: var(--muted); margin-bottom: 3rem; }
+    .section-label {
+      display: inline-block; font-size: .75rem; font-weight: 700; letter-spacing: .12em;
+      text-transform: uppercase; color: var(--primary); margin-bottom: .5rem;
+    }
+
+    /* ── Pillar cards ── */
+    .pillar-card {
+      border: none; border-radius: 16px; padding: 2rem;
+      box-shadow: 0 1px 3px rgba(0,0,0,.08), 0 8px 24px rgba(0,0,0,.06);
+      height: 100%; transition: transform .2s, box-shadow .2s;
+    }
+    .pillar-card:hover { transform: translateY(-4px); box-shadow: 0 8px 32px rgba(0,0,0,.12); }
+
+    /* ── Footer ── */
+    footer { background: var(--dark); color: #64748b; padding: 2.5rem 0; font-size: .88rem; }
+    footer a { color: #38bdf8; text-decoration: none; }
+  </style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════ NAVBAR ═══════════════════════════════ -->
+<nav id="mainNav" class="navbar navbar-expand-lg fixed-top">
+  <div class="container">
+    <a class="navbar-brand" href="index.html">
+      <i class="fas fa-shield-halved me-2"></i>DFW
+    </a>
+    <button class="navbar-toggler border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navMenu">
+      <span class="navbar-toggler-icon"></span>
+    </button>
+    <div class="collapse navbar-collapse" id="navMenu">
+      <ul class="navbar-nav ms-auto gap-1">
+        <li class="nav-item"><a class="nav-link" href="index.html">Home</a></li>
+        <li class="nav-item"><a class="nav-link" href="index.html#architecture">Architecture</a></li>
+        <li class="nav-item"><a class="nav-link" href="index.html#policy">Policy Rules</a></li>
+        <li class="nav-item"><a class="nav-link" href="index.html#engine">Policy Engine</a></li>
+        <li class="nav-item"><a class="nav-link" href="index.html#agent">Agent</a></li>
+        <li class="nav-item"><a class="nav-link active" href="implementation.html">Implementation</a></li>
+        <li class="nav-item"><a class="nav-link" href="test-environment.html">Test Env</a></li>
+        <li class="nav-item"><a class="nav-link" href="review.html">Review</a></li>
+      </ul>
+    </div>
+  </div>
+</nav>
+
+<!-- ═══════════════════════════════ HERO / HEADER ═════════════════════════ -->
+<section style="padding-top: 120px; padding-bottom: 40px; background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 100%); color: #fff;">
+  <div class="container text-center">
+    <div class="hero-badge" style="background: rgba(56,189,248,.15); border: 1px solid rgba(56,189,248,.4); color: #38bdf8;">
+      <i class="fas fa-tasks me-1"></i>10-Phase Roadmap
+    </div>
+    <h1 class="display-5 fw-bold">Implementation Plan</h1>
+    <p class="lead" style="max-width: 680px; margin: 0 auto; color: #94a3b8;">
+      Incremental, independently valuable phases. Strict TDD. Progressive e2e from unit tests to real Azure cross-VNet traffic.
+    </p>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════ CONTENT ═════════════════════════════ -->
+<section>
+  <div class="container">
+    <div class="mb-5">
+      <p class="lead">
+        The plan delivers a working DFW system through 10 ordered, mergeable phases. Each phase produces code that builds, tests green, and delivers standalone value.
+      </p>
+    </div>
+
+    <div class="row g-4">
+      <!-- Phase groups -->
+      <div class="col-md-6">
+        <div class="pillar-card h-100">
+          <h5 class="fw-bold mb-3"><span class="badge bg-primary me-2">1-4</span>Foundations</h5>
+          <ul class="text-muted">
+            <li><strong>1. Bootstrap</strong> — go.mod, Makefile (bpf targets + LLVM agent image), cmd/ stubs, basic CI</li>
+            <li><strong>2. CRDs &amp; Types</strong> — Zone, GroundRule, ZoneRule, PolicyVersion with validation + samples matching the 4-zone matrix</li>
+            <li><strong>3. Policy Engine</strong> — ground + zone rule merge (OR logic, ground always wins), conflict detection, compilation to the four eBPF map structures + immutable version</li>
+            <li><strong>4. Controller</strong> — controller-runtime skeleton, leader election, reconciliation that drives the engine and creates PolicyVersion CRs</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="col-md-6">
+        <div class="pillar-card h-100">
+          <h5 class="fw-bold mb-3"><span class="badge bg-success me-2">5-7</span>Data Plane &amp; Distribution</h5>
+          <ul class="text-muted">
+            <li><strong>5. eBPF Program</strong> — data-driven C (zone LPM lookup on host interfaces, dual egress+ingress verdict check, tc-BPF primary, ringbuf audit, double-buffer maps, early same-zone bypass)</li>
+            <li><strong>6. Agent</strong> — runtime LLVM compile of the shipped C at boot, cilium/ebpf loader + tc attach (only admin-specified ifaces), atomic map apply, last-known-good recovery, health/metrics</li>
+            <li><strong>7. gRPC Channel</strong> — signed policy updates (map data blobs), agent registration, unidirectional push, basic delta + backoff, status/audit feedback</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="col-md-6">
+        <div class="pillar-card h-100">
+          <h5 class="fw-bold mb-3"><span class="badge bg-warning text-dark me-2">8-10</span>Production &amp; Validation</h5>
+          <ul class="text-muted">
+            <li><strong>8. Safety &amp; Security</strong> — strict atomic flips, restart recovery, signature verification (fail-closed), version skew tracking, breakglass support</li>
+            <li><strong>9. Packaging &amp; Coexistence</strong> — Helm for controller + agent DaemonSet, Podman/systemd examples for VMs, explicit tc priority + CNI coexistence tests in kind + bare metal</li>
+            <li><strong>10. Observability &amp; Ops</strong> — Prometheus metrics, ringbuf → structured audit, simulation/dry-run endpoint, runbooks, full propagation SLA validation</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="col-md-6">
+        <div class="pillar-card h-100" style="border: 2px solid #38bdf8;">
+          <h5 class="fw-bold">Core Principles</h5>
+          <ul class="small text-muted">
+            <li>Every phase builds &amp; tests green independently</li>
+            <li>Progressive environments: unit → envtest → kind → real Azure multi-VNet</li>
+            <li>The Azure test environment is the primary validation vehicle for the dual-consent model</li>
+            <li>YAGNI: focus on the zone-centric ground + zone rules model first</li>
+          </ul>
+          <div class="mt-3">
+            <a href="plans/2026-06-04-dfw-implementation-plan.md" class="btn btn-primary btn-sm" target="_blank">Full detailed plan (Markdown)</a>
+            <a href="https://github.com/hwchiu/mon/blob/main/docs/plans/2026-06-04-dfw-implementation-plan.md" class="btn btn-outline-secondary btn-sm ms-1" target="_blank">GitHub</a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="alert alert-light mt-5" style="border-radius: 12px;">
+      <strong>Next step after reading this page:</strong> Go to the <a href="test-environment.html">Azure Test Environment</a> page to see how we will actually prove the design (including the gaps called out in the Review).
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════ FOOTER ══════════════════════════════ -->
+<footer>
+  <div class="container text-center">
+    <div class="mb-2">
+      <i class="fas fa-shield-halved me-2"></i>
+      <strong class="text-light">DFW — Distributed Firewall</strong>
+    </div>
+    <p class="mb-1 small">
+      <a href="index.html" class="text-light">Home</a> ·
+      <a href="implementation.html" class="text-light">Implementation</a> ·
+      <a href="test-environment.html" class="text-light">Test Env</a> ·
+      <a href="review.html" class="text-light">Review</a>
+    </p>
+    <p class="mb-0" style="font-size:.78rem; color: #64748b;">
+      Served via GitHub Pages • <a href="https://github.com/hwchiu/mon" class="text-light">github.com/hwchiu/mon</a>
+    </p>
+  </div>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

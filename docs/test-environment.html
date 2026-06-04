@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Azure Test Environment | DFW — Distributed Firewall</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet" />
+  <style>
+    :root {
+      --primary:   #2563eb;
+      --primary-d: #1d4ed8;
+      --accent:    #06b6d4;
+      --danger:    #ef4444;
+      --success:   #22c55e;
+      --dark:      #0f172a;
+      --mid:       #1e293b;
+      --muted:     #64748b;
+      --surface:   #f8fafc;
+    }
+    html { scroll-behavior: smooth; }
+    body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--surface); color: #1e293b; }
+    section { padding: 60px 0; }
+    section:nth-child(even) { background: #fff; }
+    #mainNav {
+      background: rgba(15,23,42,.95);
+      backdrop-filter: blur(8px);
+      border-bottom: 1px solid rgba(255,255,255,.08);
+    }
+    #mainNav .nav-link { font-size: .85rem; letter-spacing: .04em; color: #94a3b8 !important; transition: color .2s; }
+    #mainNav .nav-link:hover, #mainNav .nav-link.active { color: #38bdf8 !important; }
+    .navbar-brand { font-weight: 700; font-size: 1.25rem; color: #38bdf8 !important; letter-spacing: .06em; }
+    .section-title { font-size: 2rem; font-weight: 800; margin-bottom: .5rem; letter-spacing: -.02em; }
+    .section-subtitle { color: var(--muted); margin-bottom: 2rem; }
+    .section-label { display: inline-block; font-size: .75rem; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--primary); margin-bottom: .5rem; }
+    .pillar-card {
+      border: none; border-radius: 16px; padding: 2rem;
+      box-shadow: 0 1px 3px rgba(0,0,0,.08), 0 8px 24px rgba(0,0,0,.06);
+      height: 100%; transition: transform .2s, box-shadow .2s;
+    }
+    .pillar-card:hover { transform: translateY(-4px); box-shadow: 0 8px 32px rgba(0,0,0,.12); }
+    .mermaid-wrap { background: #fff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 1.5rem; overflow-x: auto; }
+    footer { background: var(--dark); color: #64748b; padding: 2.5rem 0; font-size: .88rem; }
+    footer a { color: #38bdf8; text-decoration: none; }
+  </style>
+</head>
+<body>
+
+<nav id="mainNav" class="navbar navbar-expand-lg fixed-top">
+  <div class="container">
+    <a class="navbar-brand" href="index.html">
+      <i class="fas fa-shield-halved me-2"></i>DFW
+    </a>
+    <button class="navbar-toggler border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navMenu">
+      <span class="navbar-toggler-icon"></span>
+    </button>
+    <div class="collapse navbar-collapse" id="navMenu">
+      <ul class="navbar-nav ms-auto gap-1">
+        <li class="nav-item"><a class="nav-link" href="index.html">Home</a></li>
+        <li class="nav-item"><a class="nav-link" href="index.html#architecture">Architecture</a></li>
+        <li class="nav-item"><a class="nav-link" href="index.html#agent">Agent</a></li>
+        <li class="nav-item"><a class="nav-link" href="implementation.html">Implementation</a></li>
+        <li class="nav-item"><a class="nav-link active" href="test-environment.html">Test Env</a></li>
+        <li class="nav-item"><a class="nav-link" href="review.html">Review</a></li>
+      </ul>
+    </div>
+  </div>
+</nav>
+
+<!-- Header -->
+<section style="padding-top: 120px; padding-bottom: 30px; background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 100%); color: #fff;">
+  <div class="container text-center">
+    <div style="background: rgba(34,197,94,.15); border: 1px solid rgba(34,197,94,.4); color: #22c55e; display: inline-block; border-radius: 999px; padding: .35rem 1rem; font-size: .82rem; font-weight: 600; margin-bottom: 1rem;">
+      <i class="fas fa-cloud me-1"></i>Real Azure • Real Traffic • Real Validation
+    </div>
+    <h1 class="display-5 fw-bold">Azure Test Environment</h1>
+    <p class="lead" style="max-width: 720px; margin: 0 auto; color: #94a3b8;">
+      4 VNets with exact zone CIDRs, AKS clusters + standalone Ubuntu VMs. The place where we prove the dual-consent model, &lt;1s propagation, and cloud networking realities.
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="container">
+    <h2 class="section-title text-center mb-4">Topology</h2>
+    <div class="mermaid-wrap mb-5">
+      <pre class="mermaid">
+graph TD
+    subgraph Mgmt["🟨 Management Zone 10.4.0.0/16"]
+        C["AKS Controller<br/>(Policy Engine + gRPC)"]
+        ACR["ACR (images)"]
+        LA["Log Analytics"]
+    end
+
+    subgraph DMZ["🟦 DMZ 10.1.0.0/16"]
+        A1["AKS (DaemonSet)"]
+        V1["2× Ubuntu VMs<br/>Podman agents"]
+    end
+
+    subgraph Internal["🟩 Internal 10.2.0.0/16"]
+        A2["AKS"]
+        V2["2× Ubuntu VMs"]
+    end
+
+    subgraph Prod["🟥 Production 10.3.0.0/16"]
+        A3["AKS"]
+        V3["1× Ubuntu VM"]
+    end
+
+    C -->|signed map data push| A1 & A2 & A3 & V1 & V2 & V3
+    V1 -. "cross-VNet traffic (real node IPs)" .-> A2
+    A1 -. "ringbuf + version reports" .-> C
+
+    classDef z fill:#0f172a,stroke:#38bdf8,color:#e0f2fe
+    class Mgmt,DMZ,Internal,Prod z
+      </pre>
+    </div>
+
+    <div class="row g-4">
+      <div class="col-lg-4">
+        <div class="pillar-card">
+          <h5><i class="fas fa-vial text-primary me-2"></i>What We Validate Here</h5>
+          <ul class="small">
+            <li>Zone CIDR lookup on real Azure-routed packets (node IPs)</li>
+            <li>Both egress AND ingress checks on forward + return traffic</li>
+            <li>AKS (Azure CNI) + bare-metal VM (Podman) agent paths side-by-side</li>
+            <li>Wall-clock propagation measurement across real network</li>
+            <li>Controller outage → agents keep last-good policy</li>
+            <li>Overlay vs traditional CNI impact on visible IPs</li>
+            <li>tc attach on real Azure NICs (including accelerated networking)</li>
+          </ul>
+        </div>
+      </div>
+      <div class="col-lg-4">
+        <div class="pillar-card">
+          <h5><i class="fas fa-tools text-success me-2"></i>Terraform</h5>
+          <p class="small">Location: <code>infra/azure/</code></p>
+          <ul class="small">
+            <li>4 VNets + full-mesh peering (no UDR for clean IP visibility)</li>
+            <li>AKS clusters with node subnets inside zone CIDRs</li>
+            <li>Ubuntu 22.04 VMs with cloud-init (podman ready)</li>
+            <li>ACR + Log Analytics workspace included</li>
+          </ul>
+          <a href="https://github.com/hwchiu/mon/tree/main/infra/azure" target="_blank" class="btn btn-sm btn-success mt-2">View code on GitHub →</a>
+        </div>
+      </div>
+      <div class="col-lg-4">
+        <div class="pillar-card">
+          <h5><i class="fas fa-list-check text-warning me-2"></i>Core Scenarios</h5>
+          <ol class="small">
+            <li>Ground matrix applied → traffic from Internal to DMZ blocked on both sides</li>
+            <li>ZoneRule added → both agents receive update, ringbuf shows new verdict, traffic flows</li>
+            <li>Full TCP session (forward + return) only succeeds when bidirectional consent exists</li>
+            <li>Measure time from <code>kubectl apply</code> to first successful packet on both agents</li>
+            <li>Scale controller to 0 → traffic continues with last-good policy</li>
+          </ol>
+        </div>
+      </div>
+    </div>
+
+    <div class="mt-5 p-4 bg-white rounded-3 border">
+      <h6 class="fw-bold">Quick Start (after <code>terraform apply</code>)</h6>
+      <pre class="small bg-light p-3 rounded"><code>az aks get-credentials -g dfw-test-rg -n dfw-zone-004 --overwrite-existing
+# Build &amp; push controller + agent images to the ACR
+# kubectl apply the 4 Zone CRs using the exact VNet CIDRs
+# helm install dfw-controller ...
+# Deploy agent DaemonSet to zone AKS clusters
+# On VMs: podman run --privileged --network host ... the agent image</code></pre>
+      <p class="small text-muted mb-0">Full instructions and post-apply scripts are in the detailed plan below.</p>
+    </div>
+
+    <div class="text-center mt-4">
+      <a href="plans/2026-06-04-azure-dfw-test-environment.md" class="btn btn-lg btn-outline-primary" target="_blank">
+        Full Azure Test Environment Plan &amp; Validation Matrix →
+      </a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container text-center">
+    <div class="mb-2">
+      <i class="fas fa-shield-halved me-2"></i>
+      <strong class="text-light">DFW — Distributed Firewall</strong>
+    </div>
+    <p class="mb-1 small">
+      <a href="index.html" class="text-light">Home</a> ·
+      <a href="implementation.html" class="text-light">Implementation</a> ·
+      <a href="test-environment.html" class="text-light">Test Env</a> ·
+      <a href="review.html" class="text-light">Review</a>
+    </p>
+    <p class="mb-0" style="font-size:.78rem; color: #64748b;">
+      Served via GitHub Pages • <a href="https://github.com/hwchiu/mon" class="text-light">github.com/hwchiu/mon</a>
+    </p>
+  </div>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script>
+  mermaid.initialize({ startOnLoad: true, theme: 'neutral', flowchart: { curve: 'basis' } });
+</script>
+</body>
+</html>

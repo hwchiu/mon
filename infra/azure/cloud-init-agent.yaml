@@ -1,0 +1,19 @@
+#cloud-config
+package_update: true
+packages:
+  - podman
+  - curl
+  - jq
+  - net-tools
+  - iproute2
+  - tcpdump
+  - hping3   # for crafted packets if available
+
+runcmd:
+  - mkdir -p /etc/dfw-agent /var/lib/dfw-agent /sys/fs/bpf
+  - echo "DFW_AGENT_ZONE=${zone_id}" > /etc/dfw-agent/config
+  - echo "DFW_CONTROLLER=${controller}" >> /etc/dfw-agent/config
+  - echo "DFW_INTERFACES=eth0" >> /etc/dfw-agent/config
+  - systemctl enable --now podman.socket || true
+  - echo "Agent VM for zone ${zone_name} ready. Run the DFW agent container with --privileged --network host -v /sys/fs/bpf:/sys/fs/bpf ..." > /etc/motd
+  - logger "DFW test VM cloud-init complete for zone ${zone_id}"
