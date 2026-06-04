@@ -1398,16 +1398,75 @@ Controller binary has similar debug subcommands + a `/healthz` and optional gRPC
 
 In addition to the ringbuf + perHostStatus already described:
 
+- **Monitoring scope**: monitoring values are derived exclusively from DFW zone rules / policies. User-defined policies are intentionally excluded from the aggregate monitoring views so dashboards and alerts reflect only centrally managed zone policy state.
+- **Agent health monitoring**:
+  - `ebpf_controller_agents_connected`: total devices with an active agent connection.
+  - `ebpf_controller_agents_disconnected`: registered devices without an active agent connection.
+  - `ebpf_controller_agent_coverage_rate`: percentage of total registered devices with a working agent, calculated as `connected / registered * 100` (example: `98.2% = 1247 / 1270`).
+- **Policy version distribution**:
+  - Track the policy revision currently enforced by agents for every zone.
+  - Surface both the zone total and the revision skew so operators can immediately spot lagging rollouts, for example `Zone A | 156 agents | Latest | 3 on v42, 1 on v41`.
+  - Export a controller metric such as `ebpf_controller_zone_policy_version_agents{zone,version}` and expose the same breakdown in the Grafana dashboard.
+- **Policy coverage**:
+  - Track how many ingress and egress rules are generated per zone from DFW zone policy compilation.
+  - Export per-zone and fleet-wide totals, for example `60 ingress`, `44 egress`, `104 total` across all zones.
+  - Useful controller metrics include `ebpf_controller_zone_ingress_rules`, `ebpf_controller_zone_egress_rules`, and `ebpf_controller_zone_rules_total`.
 - Controller metrics: `ebpf_controller_hosts_registered`, `ebpf_controller_compiles_total`, `ebpf_controller_push_latency_seconds{host}`, `ebpf_controller_policy_versions`.
 - Agent metrics + the ones listed in CLI section.
-- Grafana dashboard template (shipped in the chart): per-host policy age, drop rate by priority band, map utilization heat map, agent CPU when under attack (drops are cheap).
+- Grafana dashboard template (shipped in the chart): agent connectivity summary, coverage rate, per-zone policy version distribution, per-zone ingress/egress rule totals, per-host policy age, drop rate by priority band, map utilization heat map, agent CPU when under attack (drops are cheap).
 - Alerts examples:
+  - Coverage rate drops below the target SLO or disconnected devices increase sharply.
+  - A zone remains version-skewed for too long after a rollout.
+  - Unexpected drop in generated ingress/egress rule count for a zone (possible compiler or source-policy regression).
   - `ebpf_firewall_map_utilization > 0.8` for 5m (split policy soon).
   - Host has `Applied=False` for > 10m.
   - Sudden spike in drops from a new source after a policy change (possible bad rule or attack).
   - Agent version skew across fleet.
 
 Events from the controller (on CFP/MH) + agent-forwarded ringbuf events give a good audit trail for "who changed what and what was the effect".
+
+### Auditing
+
+- **Audit scope**: audit data is collected exclusively from DFW zone rules/policies. User-defined policies are excluded from audit views to keep compliance and incident analysis aligned with centrally managed zone policy intent.
+- **Audit event fields** (normalized schema for controller storage and query):
+  - `timestamp`
+  - `source_ip`
+  - `destination_ip`
+  - `source_port`
+  - `destination_port`
+  - `protocol`
+  - `source_zone`
+  - `destination_zone`
+  - `blocked_by` (policy/rule identifier)
+  - `direction` (ingress/egress)
+- **Blocked traffic analytics** (default dashboard and API aggregates):
+  - Total blocked traffic per 24 hours.
+  - Blocked traffic by zone.
+  - Protocol split (TCP/UDP/ICMP/other).
+  - Top blocked target ports.
+  - Blocked traffic by specific policy/rule.
+  - Sample blocked traffic entries with timestamps for triage workflows.
+- **Audit logger (kernel space + upstream path)**:
+  - On `block`, record src/dst/proto/port tuple and direction metadata.
+  - On `match`, record which policy/rule matched (`blocked_by` attribution).
+  - Logging is sample-based (not full packet capture) to control overhead and storage costs.
+  - Agent forwards sampled audit events upstream to the controller for aggregation, retention, and query.
+
+### Simulation and Dry Run
+
+- Provide a standalone simulation component that reads live policy data from the registry.
+- Support two non-enforcing modes for pre-change analysis and validation:
+  1. **Simulation mode**: replay packet/event samples against current candidate policy revisions and report projected allow/deny outcomes.
+  2. **Dry-run mode**: evaluate live traffic decisions in parallel without enforcing changes on production datapaths.
+- Both modes must guarantee **no enforcement on live traffic** and produce auditable comparison outputs (current vs candidate policy outcomes).
+
+### Key Requirement Summary
+
+- **Scale**: support fleet-scale hosts/zones and high rule counts with predictable performance and operational safety.
+- **Propagation latency**: keep policy compile/distribution/apply latency bounded and observable from controller to agent.
+- **Coverage**: maintain high agent connectivity and measurable policy/audit coverage across all managed zones.
+- **eBPF support**: preserve kernel-space enforcement and sampled audit logging through XDP/tc/cgroup-compatible paths.
+- **Deployment**: support both Kubernetes-native and baremetal/VM operational models with consistent control-plane behavior.
 
 ### Policy Lifecycle Operations (GitOps friendly)
 
