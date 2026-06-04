@@ -65,14 +65,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (&controller.ZoneReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "Zone")
-		os.Exit(1)
-	}
-
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")
 		os.Exit(1)
@@ -85,6 +77,16 @@ func main() {
 	setupLog.Info("starting manager and gRPC distribution server")
 
 	distServer := distribution.StartGRPCServer(":9443")
+
+	// Wire reconciler (after dist so it can push updates on new PolicyVersion from engine)
+	if err = (&controller.ZoneReconciler{
+		Client:      mgr.GetClient(),
+		Scheme:      mgr.GetScheme(),
+		Distributor: distServer,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "Zone")
+		os.Exit(1)
+	}
 
 	// Start simple frontend / status API for tracking and configuration (on :8082 to avoid conflict with metrics 8080)
 	go func() {

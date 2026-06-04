@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -11,6 +12,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	dfwv1alpha1 "github.com/hwchiu/mon/api/dfw/v1alpha1"
+	"github.com/hwchiu/mon/pkg/distribution"
 	"github.com/hwchiu/mon/pkg/engine"
 )
 
@@ -18,6 +20,9 @@ import (
 type ZoneReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+
+	// Distributor is optional; if set, new PolicyVersion will trigger gRPC push to agents.
+	Distributor *distribution.Server
 }
 
 func (r *ZoneReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -57,6 +62,9 @@ func (r *ZoneReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 
 	logger.Info("Compiled new policy version", "version", policy.Version)
 
+	// Serialize the real MapData (4 maps) for the wire (agents will unmarshal to types.MapData then load eBPF).
+	mapBytes, _ := json.Marshal(policy.MapData)
+
 	// Create or update a PolicyVersion CR
 	pv := &dfwv1alpha1.PolicyVersion{
 		ObjectMeta: metav1.ObjectMeta{
@@ -70,7 +78,7 @@ func (r *ZoneReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			CreatedAt:     metav1.NewTime(policy.CreatedAt),
 			GroundHash:    policy.GroundHash,
 			ZoneRulesHash: policy.ZoneRuleHash,
-			MapDataRef:    "configmap/policy-" + policy.Version, // placeholder
+			MapDataRef:    "inline:" + policy.Version, // in real: ref to ConfigMap holding the bytes
 		},
 	}
 
@@ -82,6 +90,12 @@ func (r *ZoneReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		logger.V(1).Info("PolicyVersion already exists", "version", policy.Version)
 	} else {
 		logger.Info("Created PolicyVersion CR", "name", pv.Name)
+	}
+
+	// If distributor wired, push the map data (signed stub) to connected agents.
+	// This closes the loop: CR change -> engine -> PV -> gRPC push -> agent Apply.
+	if r.Distributor != nil {
+		r.Distributor.PushUpdate("", policy.Version, mapBytes, nil /* sig */)
 	}
 
 	return ctrl.Result{}, nil

@@ -87,3 +87,47 @@ func (*RegisterResponse) ProtoMessage()    {}
 func (x *StatusReport) Reset()         {}
 func (x *StatusReport) String() string { return "" }
 func (*StatusReport) ProtoMessage()    {}
+
+// --- Minimal client stub so agent + grpc_client compile (real codegen would provide full) ---
+type distributionClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewDistributionClient(cc grpc.ClientConnInterface) DistributionClient {
+	return &distributionClient{cc}
+}
+
+func (c *distributionClient) Register(ctx context.Context, in *RegisterRequest, opts ...grpc.CallOption) (*RegisterResponse, error) {
+	out := new(RegisterResponse)
+	err := c.cc.Invoke(ctx, "/dfw.v1.Distribution/Register", in, out, opts...)
+	if err != nil { return nil, err }
+	return out, nil
+}
+
+func (c *distributionClient) StreamUpdates(ctx context.Context, in *RegisterRequest, opts ...grpc.CallOption) (Distribution_StreamUpdatesClient, error) {
+	stream, err := c.cc.NewStream(ctx, &grpc.StreamDesc{StreamName: "StreamUpdates", ServerStreams: true}, "/dfw.v1.Distribution/StreamUpdates", opts...)
+	if err != nil { return nil, err }
+	x := &distributionStreamUpdatesClient{stream}
+	if err := x.ClientStream.SendMsg(in); err != nil { return nil, err }
+	if err := x.ClientStream.CloseSend(); err != nil { return nil, err }
+	return x, nil
+}
+
+type distributionStreamUpdatesClient struct {
+	grpc.ClientStream
+}
+
+func (x *distributionStreamUpdatesClient) Recv() (*PolicyUpdate, error) {
+	m := new(PolicyUpdate)
+	if err := x.ClientStream.RecvMsg(m); err != nil { return nil, err }
+	return m, nil
+}
+
+func (c *distributionClient) ReportStatus(ctx context.Context, in *StatusReport, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, "/dfw.v1.Distribution/ReportStatus", in, out, opts...)
+	if err != nil { return nil, err }
+	return out, nil
+}
+
+var _ DistributionClient = (*distributionClient)(nil)

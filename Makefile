@@ -65,7 +65,7 @@ run: manifests generate fmt vet ## Run a controller from your host.
 
 # Docker Hub support: set DOCKER_HUB_REPO (e.g. yourusername) in env or GitHub secrets
 # Then images become ${DOCKER_HUB_REPO}/dfw-controller and /dfw-agent
-DOCKER_HUB_REPO ?= $(or ${DOCKER_HUB_REPO},dfw)
+DOCKER_HUB_REPO ?= dfw
 
 CONTROLLER_IMG := $(if $(filter dfw-controller:latest,$(CONTROLLER_IMG)),$(DOCKER_HUB_REPO)/dfw-controller:latest,$(CONTROLLER_IMG))
 AGENT_IMG := $(if $(filter dfw-agent:latest,$(AGENT_IMG)),$(DOCKER_HUB_REPO)/dfw-agent:latest,$(AGENT_IMG))
@@ -142,3 +142,17 @@ envtest: $(ENVTEST) ## Download envtest-setup locally if necessary.
 	test -s $(LOCALBIN)/setup-envtest || GOBIN=$(LOCALBIN) go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
 
 # NOTE: Requires Go 1.22+. For eBPF agent image, use multi-stage with clang/LLVM.
+
+# eBPF (data-driven DFW program). Requires clang/llc in PATH or use docker agent build.
+# Produces bpf/dfw.bpf.o (loadable ELF). In real: agent container compiles the .c at boot.
+CLANG ?= clang
+CLANG_FLAGS ?= -O2 -g -target bpf -c -D__TARGET_ARCH_x86 -I/usr/include -I/usr/include/bpf
+
+.PHONY: bpf
+bpf: ## Compile the DFW eBPF C to ELF object (for inspection / agent).
+	$(CLANG) $(CLANG_FLAGS) bpf/dfw.bpf.c -o bpf/dfw.bpf.o
+	@echo "bpf/dfw.bpf.o ready (use bpftool prog load, or let agent compile source)"
+
+.PHONY: bpf-clean
+bpf-clean:
+	rm -f bpf/*.o
