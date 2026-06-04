@@ -181,6 +181,7 @@
         <li class="nav-item"><a class="nav-link" href="implementation.html">Implementation</a></li>
         <li class="nav-item"><a class="nav-link" href="test-environment.html">Test Env</a></li>
         <li class="nav-item"><a class="nav-link" href="review.html">Review</a></li>
+        <li class="nav-item"><a class="nav-link" href="controller.html">Controller UI &amp; API</a></li>
       </ul>
     </div>
   </div>
@@ -1321,6 +1322,15 @@ graph TD
           </div>
         </a>
       </div>
+      <div class="col-md-4 mt-3 mt-md-0">
+        <a href="controller.html" class="text-decoration-none">
+          <div class="pillar-card h-100" style="border-left: 4px solid var(--primary);">
+            <h5 class="fw-bold"><i class="fas fa-desktop me-2"></i>Controller UI &amp; API</h5>
+            <p class="text-muted small mb-0">8082 dashboard (live agents, clickable ground matrix, CRUD) + the /api/* endpoints that drive engine + gRPC pushes.</p>
+            <div class="mt-3"><span class="badge bg-primary">Open docs →</span></div>
+          </div>
+        </a>
+      </div>
     </div>
   </div>
 </section>
@@ -1342,8 +1352,17 @@ graph TD
       See the <a href="https://github.com/hwchiu/mon">hwchiu/mon</a> repository for source, plans, and Terraform.
       Documentation served via GitHub Pages from <code>/docs</code>.
     </p>
+    <p class="mb-1" style="font-size:.78rem; color: #475569;">
+      <strong>Current status (June 2026):</strong>
+      Full controller (CRDs, engine with exact design matrix + 4-map MapData output + both-sides ComputeVerdict, reconciler → PolicyVersion, gRPC distributor with real PushUpdate + agent tracking),
+      working web UI on :8082 (status, agents, interactive Ground Rules matrix that creates CRs, Zone/ZoneRule CRUD, policies list),
+      complete data-driven bpf/dfw.bpf.c (LPM + dual verdict + ringbuf + active_idx + the 4 maps),
+      agent with ApplyPolicy for real MapData + boot LLVM compile hook,
+      1 AKS + 2 VMs (k3s+Cilium bootstrap on VMs) Azure test env,
+      Docker + GH Actions + Pages.
+    </p>
     <p class="mb-0" style="font-size:.78rem; color: #475569;">
-      Last updated: 2026-06-05 (design + Azure test env + review added)
+      Last updated: 2026-06 (frontend + core engine/gRPC/bpf/agent + infra simplification to 1 AKS + 2 k3s VMs + controller UI/API docs)
     </p>
   </div>
 </footer>

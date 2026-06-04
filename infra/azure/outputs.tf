@@ -32,12 +32,17 @@ output "test_zones" {
 output "next_steps" {
   value = <<EOT
 1. az group list | grep dfw-test
-2. Run: terraform output -raw controller_get_creds
-3. Build & push controller + agent images to the ACR above.
-4. Create the 4 Zone CRs using the exact CIDRs shown in test_zones.
-5. Deploy controller Helm chart to the Management AKS.
-6. Deploy agent DaemonSet to the other AKS clusters (and run on the VMs via podman).
-7. Apply ground + zone rules from docs/index.html examples.
-8. Generate cross-zone traffic between VMs in different zones and inspect ringbuf/ logs on the agents.
+2. Run: terraform output -raw controller_get_creds   # 1 AKS (dfw-zone-004 / mgmt) for CONTROLLER only
+3. Build & push controller + agent images (Docker Hub or ACR).
+4. Create Zone CRs (use test_zones for the 4 logical CIDRs; only 001/002/004 will have live nodes/VMs).
+5. Deploy controller to the single Management AKS (dfw-zone-004).
+6. For the 2 VMs (zone-001 and zone-002):
+   - They run k3s (single-node) + instructions for Cilium CNI (run /root/install-cilium.sh on the VM after boot).
+   - Also have Podman pre-installed for the standalone "VM agent" path.
+   - SSH to VM, get k3s kubeconfig: scp azureuser@<vm-ip>:/etc/rancher/k3s/k3s.yaml ./k3s-001.yaml (fix server IP if needed).
+   - Then you can kubectl apply -f agent-daemonset.yaml (with ZONE=zone-001) into that k3s for "K8s + Cilium coexistence" test.
+   - Or use the podman path: bash vm-agent-example.sh zone-001 <controller-ip>:9443
+7. Apply ground + zone rules from docs/index.html (the 4x4 matrix).
+8. Test: cross-zone traffic (VM1 <-> VM2, VM <-> AKS nodes, hostNet pods), check DFW drops/allows, ringbuf on agents, frontend UI on controller :8082.
 EOT
 }

@@ -8,6 +8,7 @@ packages:
   - iproute2
   - tcpdump
   - hping3   # for crafted packets if available
+  - helm     # for Cilium later (may come from repo)
 
 runcmd:
   - mkdir -p /etc/dfw-agent /var/lib/dfw-agent /sys/fs/bpf
@@ -15,5 +16,46 @@ runcmd:
   - echo "DFW_CONTROLLER=${controller}" >> /etc/dfw-agent/config
   - echo "DFW_INTERFACES=eth0" >> /etc/dfw-agent/config
   - systemctl enable --now podman.socket || true
-  - echo "Agent VM for zone ${zone_name} ready. Run the DFW agent container with --privileged --network host -v /sys/fs/bpf:/sys/fs/bpf ..." > /etc/motd
+
+  # --- k3s + Cilium setup for "K8s with Cilium" coexistence testing on this VM ---
+  # Single-node k3s (lightweight). We disable flannel so we can install Cilium as CNI.
+  # After boot, run /root/install-cilium.sh (or wait a minute and it can be automated).
+  - curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="server --flannel-backend=none --disable-network-policy --disable=traefik,servicelb,metrics-server --write-kubeconfig-mode=644 --cluster-cidr=10.42.0.0/16" sh - || true
+  - mkdir -p /etc/rancher/k3s
+  - cat > /root/install-cilium.sh << 'CILIUM_EOF'
+#!/bin/bash
+set -euo pipefail
+export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+echo "Waiting for k3s node to be ready..."
+kubectl wait --for=condition=Ready node --all --timeout=180s || true
+# Install Cilium CLI (optional but handy)
+CILIUM_CLI_VERSION=$(curl -s https://raw.githubusercontent.com/cilium/cilium-cli/main/stable.txt)
+CLI_ARCH=amd64
+curl -L --fail --remote-name-all https://github.com/cilium/cilium-cli/releases/download/${CILIUM_CLI_VERSION}/cilium-linux-${CLI_ARCH}.tar.gz{,.sha256sum}
+sha256sum --check cilium-linux-${CLI_ARCH}.tar.gz.sha256sum
+sudo tar xzvfC cilium-linux-${CLI_ARCH}.tar.gz /usr/local/bin
+rm cilium-linux-${CLI_ARCH}.tar.gz{,.sha256sum} || true
+
+# Helm install of Cilium suitable for k3s test (kube-proxy replacement, single node)
+helm repo add cilium https://helm.cilium.io/ || true
+helm repo update
+helm upgrade --install cilium cilium/cilium --namespace kube-system \
+  --set kubeProxyReplacement=strict \
+  --set k8sServiceHost=$(hostname -I | awk '{print $1}') \
+  --set k8sServicePort=6443 \
+  --set operator.replicas=1 \
+  --set ipam.operator.clusterPoolIPv4PodCIDRList="10.42.0.0/16" \
+  --set tunnel=vxlan \
+  --wait || echo "Cilium helm may need manual tweak; see docs or cilium status"
+
+echo "Cilium install attempted. Use: cilium status --wait; kubectl get pods -n kube-system | grep cilium"
+CILIUM_EOF
+  - chmod +x /root/install-cilium.sh
+
+  - echo "Agent VM for zone ${zone_name} ready." > /etc/motd
+  - echo " - Podman agent: podman run ... (see vm-agent-example.sh)" >> /etc/motd
+  - echo " - k3s (Cilium): kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes" >> /etc/motd
+  - echo " - Install Cilium CNI for k8s test: /root/install-cilium.sh (run after ~1-2min)" >> /etc/motd
+  - echo " - Then you can deploy DFW agent DaemonSet into this k3s (hostNetwork + privileged + bpf mount) to test coexistence (DFW only on eth0, not cilium_*)." >> /etc/motd
   - logger "DFW test VM cloud-init complete for zone ${zone_id}"
+

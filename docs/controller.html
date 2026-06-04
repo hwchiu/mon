@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Controller UI &amp; API | DFW — Distributed Firewall</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet" />
+  <style>
+    :root { --primary: #2563eb; --accent: #06b6d4; --dark: #0f172a; --surface: #f8fafc; }
+    body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--surface); }
+    .navbar { background: rgba(15,23,42,.95); }
+    .api-card { border-left: 4px solid var(--primary); }
+    .endpoint { font-family: ui-monospace, monospace; background:#0f172a; color:#e0f2fe; padding:.15rem .4rem; border-radius:4px; }
+    pre { background:#0f172a; color:#bae6fd; }
+  </style>
+</head>
+<body>
+<nav class="navbar navbar-expand-lg navbar-dark sticky-top">
+  <div class="container">
+    <a class="navbar-brand" href="index.html"><i class="fas fa-shield-halved me-2"></i>DFW</a>
+    <div class="navbar-nav ms-auto">
+      <a class="nav-link" href="index.html">Design</a>
+      <a class="nav-link" href="implementation.html">Implementation</a>
+      <a class="nav-link" href="test-environment.html">Test Env</a>
+      <a class="nav-link active" href="controller.html">Controller</a>
+    </div>
+  </div>
+</nav>
+
+<div class="container py-5">
+  <h1 class="mb-2">DFW Controller — UI &amp; API</h1>
+  <p class="lead text-muted">The central brain: watches Zone / GroundRule / ZoneRule CRs, runs the Policy Engine, creates immutable PolicyVersion artifacts, pushes signed map data via gRPC, and exposes a live web UI + REST API for observation and configuration.</p>
+
+  <div class="row g-4 mt-1">
+    <div class="col-md-6">
+      <div class="card h-100">
+        <div class="card-body">
+          <h5><i class="fas fa-desktop me-2 text-primary"></i>Web UI (port 8082)</h5>
+          <ul class="small">
+            <li><strong>Status cards</strong>: live counts of Zones, connected Agents (from gRPC Register/ReportStatus), PolicyVersions.</li>
+            <li><strong>Agents table</strong>: AgentID, Zone, current Version, Healthy, LastSeen. Updated by distribution server.</li>
+            <li><strong>Zones</strong>: list + "Add Zone" form (creates Zone CR via API).</li>
+            <li><strong>Ground Rules Matrix</strong>: 4x4 (or N) interactive table. Click a cell to toggle allow/deny — it POSTs a GroundRule CR. The matrix reflects current CRs. This is the immutable baseline per the design.</li>
+            <li><strong>Zone Rules</strong>: list + form to add DENY→ALLOW overrides (src/dst/ports/direction/action=allow).</li>
+            <li><strong>Recent Policy Versions</strong>: the output of the engine (version, createdAt, groundHash).</li>
+            <li>Auto-refreshes every 10s. Fully client-side + calls the controller's /api/*.</li>
+          </ul>
+          <p class="small mb-0"><strong>Access:</strong> <code>kubectl -n dfw-system port-forward svc/dfw-controller 8082:8082</code> then open http://localhost:8082</p>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-6">
+      <div class="card h-100">
+        <div class="card-body">
+          <h5><i class="fas fa-plug me-2 text-accent"></i>REST API (same port)</h5>
+          <p class="small">Lightweight JSON APIs used by the dashboard. All writes create the corresponding CRs so the ZoneReconciler + engine immediately see the change and produce a new PolicyVersion (which the gRPC layer pushes).</p>
+          <ul class="small">
+            <li><span class="endpoint">GET /api/status</span> — counts + timestamp</li>
+            <li><span class="endpoint">GET /api/agents</span> — live agents from gRPC (ID, zone, version, healthy, lastSeen)</li>
+            <li><span class="endpoint">GET /api/zones</span> + <span class="endpoint">POST /api/zones/create</span> (body: Zone CR json)</li>
+            <li><span class="endpoint">GET /api/groundrules</span> + <span class="endpoint">POST /api/groundrules/create</span> (the matrix toggle uses this)</li>
+            <li><span class="endpoint">GET /api/zonerules</span> + <span class="endpoint">POST /api/zonerules/create</span></li>
+            <li><span class="endpoint">GET /api/policies</span> — list of PolicyVersion CRs</li>
+          </ul>
+          <p class="small text-muted mb-0">Example POST body for a GroundRule (see dashboard JS for exact shape used by the matrix):</p>
+          <pre class="small p-2 mb-0"><code>{
+  "apiVersion": "dfw.example.com/v1alpha1",
+  "kind": "GroundRule",
+  "metadata": { "name": "gr-zone-001-zone-002" },
+  "spec": { "fromZone": "zone-001", "toZone": "zone-002", "ports": "all", "protocol": "all", "action": "allow" }
+}</code></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h3 class="mt-5">How configuration changes flow</h3>
+  <ol class="small">
+    <li>User (or dashboard) creates/updates a GroundRule or ZoneRule CR (via API or kubectl).</li>
+    <li>ZoneReconciler (or any change) lists all Zones + GroundRules + ZoneRules.</li>
+    <li>pkg/engine.CompileGroundAndZoneRules runs the 3-stage pipeline (collect → merge with ground-wins + OR zone rules → serialize to the 4 MapData structs + version + hashes). The ComputeVerdict implements the exact <code>src_allows &amp;&amp; dst_allows</code> rule from the design.</li>
+    <li>Controller creates a new PolicyVersion CR (immutable artifact).</li>
+    <li>Because the reconciler holds a reference to the distribution server, it calls <code>distServer.PushUpdate(..., json-serialized MapData, sig)</code>.</li>
+    <li>Connected agents (via gRPC StreamUpdates) receive the update, verify (future), call Agent.ApplyPolicy which unmarshals the MapData and (in full impl) updates the eBPF maps + flips active_idx.</li>
+  </ol>
+
+  <div class="alert alert-info small mt-4">
+    <strong>Ports on the controller pod/service:</strong><br>
+    8080 — controller-runtime metrics + (future) /metrics<br>
+    8081 — healthz / readyz<br>
+    8082 — this UI + the REST APIs above<br>
+    9443 — gRPC Distribution (Register, StreamUpdates, ReportStatus)<br>
+    9444 — webhook server (if webhooks are enabled)
+  </div>
+
+  <p class="mt-4"><a href="index.html" class="btn btn-outline-primary">← Back to Design</a> <a href="https://github.com/hwchiu/mon/tree/main/pkg/frontend" class="btn btn-link">Source (pkg/frontend)</a></p>
+</div>
+
+<footer class="bg-dark text-light py-4 small">
+  <div class="container text-center">
+    DFW Controller UI &amp; API documentation — part of the <a href="index.html" class="text-info">DFW project</a>.
+  </div>
+</footer>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

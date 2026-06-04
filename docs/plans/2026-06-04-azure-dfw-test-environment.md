@@ -1,5 +1,7 @@
 # Azure DFW Test Environment — Provisioning Plan & Terraform
 
+> **Note (June 2026):** Infra simplified to 1 AKS cluster (controller in zone-004) + 2 VMs (k3s + Cilium on the VMs for coexistence tests + Podman path). The original 4 AKS idea was replaced. See variables.tf (create_aks / create_vms flags) and the updated cloud-init that bootstraps k3s + provides /root/install-cilium.sh. Zone CRs still use the full 4-zone CIDR set from the design.
+
 **Date:** 2026-06-04  
 **Purpose:** Provide a realistic, reproducible Azure environment to validate the DFW zone-centric dual-consent model (ground rules + zone rules), <1s propagation, both-sides enforcement, eBPF on real AKS + standalone Ubuntu VMs (Podman path), cross-VNet routed traffic, coexistence notes, agent recovery, ringbuf audit, and Azure platform realities (CNI, node IPs, peering, NSGs).
 

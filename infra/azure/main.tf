@@ -22,9 +22,16 @@ resource "azurerm_log_analytics_workspace" "laws" {
 # Dynamically select a currently supported Kubernetes version in the region
 # Using pinned version from variable for compatibility in this subscription/region
 
-# One VNet + basic NSG + subnets per zone (flat for simplicity + easy peering)
+# VNets/subnets/NSG only for "active" zones (those with AKS or VMs requested).
+# With current defaults: zone-001 (1 VM), zone-002 (1 VM), zone-004 (controller AKS).
+# This avoids provisioning unnecessary resources for a 1-controller-AKS + 2-VM test env.
+locals {
+  active_zones = { for k, v in var.zones : k => v if v.create_aks || (v.create_vms > 0) }
+  zone_keys    = keys(local.active_zones)
+}
+
 resource "azurerm_virtual_network" "zones" {
-  for_each = var.zones
+  for_each = local.active_zones
 
   name                = "dfw-${each.key}-vnet"
   resource_group_name = azurerm_resource_group.main.name
@@ -33,7 +40,7 @@ resource "azurerm_virtual_network" "zones" {
 }
 
 resource "azurerm_subnet" "nodes" {
-  for_each = var.zones
+  for_each = local.active_zones
 
   name                 = "nodes"
   resource_group_name  = azurerm_resource_group.main.name
@@ -42,7 +49,7 @@ resource "azurerm_subnet" "nodes" {
 }
 
 resource "azurerm_subnet" "agents" {
-  for_each = var.zones
+  for_each = local.active_zones
 
   name                 = "agents"
   resource_group_name  = azurerm_resource_group.main.name
@@ -51,7 +58,7 @@ resource "azurerm_subnet" "agents" {
 }
 
 resource "azurerm_network_security_group" "zone" {
-  for_each = var.zones
+  for_each = local.active_zones
 
   name                = "dfw-${each.key}-nsg"
   resource_group_name = azurerm_resource_group.main.name
@@ -71,24 +78,20 @@ resource "azurerm_network_security_group" "zone" {
 }
 
 resource "azurerm_subnet_network_security_group_association" "nodes" {
-  for_each = var.zones
+  for_each = local.active_zones
 
   subnet_id                 = azurerm_subnet.nodes[each.key].id
   network_security_group_id = azurerm_network_security_group.zone[each.key].id
 }
 
 resource "azurerm_subnet_network_security_group_association" "agents" {
-  for_each = var.zones
+  for_each = local.active_zones
 
   subnet_id                 = azurerm_subnet.agents[each.key].id
   network_security_group_id = azurerm_network_security_group.zone[each.key].id
 }
 
-# Full mesh peering
-locals {
-  zone_keys = keys(var.zones)
-}
-
+# Full mesh peering among active zones (only the ones with resources)
 resource "azurerm_virtual_network_peering" "mesh" {
   for_each = {
     for pair in setproduct(local.zone_keys, local.zone_keys) :

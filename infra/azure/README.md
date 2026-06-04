@@ -1,4 +1,14 @@
-# Azure DFW Test Environment (Terraform)
+# Azure DFW Test Environment (Terraform) - Simplified
+
+**Current topology (adjusted per request):** 1 AKS cluster (controller / management only, zone-004) + 2 Ubuntu VMs (zone-001 "DMZ" and zone-002 "Internal").
+
+- The VMs are provisioned with:
+  - Podman (for standalone "VM agent" path using the dfw-agent container).
+  - k3s (single-node lightweight K8s) pre-installed with instructions + helper script to install Cilium CNI (`/root/install-cilium.sh`).
+- This lets us test:
+  - The Podman/VM agent path on bare Linux hosts whose IPs fall into the zone CIDRs.
+  - "K8s with Cilium" path: deploy the agent DaemonSet *inside* the small k3s on the VM (hostNetwork + privileged + /sys/fs/bpf mount) while Cilium handles pod networking. DFW only attaches to the admin-specified host iface (eth0), proving coexistence (does not touch cilium_* veths or CNI interfaces).
+- Logical 4 zones still supported via Zone CR `cidrs` (the other two zones can be empty or simulated later with more VMs).
 
 See the full plan: `../../docs/plans/2026-06-04-azure-dfw-test-environment.md`
 
@@ -36,17 +46,15 @@ kubectl apply -f ../../config/samples/zones.yaml
 # 6. Deploy controller + agents (Helm or manifests once charts exist in the repo)
 # helm upgrade --install dfw-controller ./charts/dfw-controller --set image.repository=... --set controller.grpc.endpoint=...
 
-# 7. On the standalone VMs (ssh using the key you configured):
-# Find their private IPs (az network nic list ... or portal)
-# Then run the agent container (example once the image is ready):
-# sudo podman run --rm --privileged --network host \
-#   -v /sys/fs/bpf:/sys/fs/bpf:rw \
-#   -v /var/lib/dfw-agent:/var/lib/dfw-agent \
-#   -e DFW_ZONE=zone-001 \
-#   -e DFW_CONTROLLER=10.4.x.x:9443 \
-#   ${DOCKER_HUB_REPO}/dfw-agent:latest
+# 7. On the 2 VMs (ssh using the key):
+#   - They have podman + k3s ready.
+#   - For k3s + Cilium path: after boot (1-2 min) run `sudo /root/install-cilium.sh` on the VM.
+#     Copy its k3s config (`scp azureuser@VM-IP:/etc/rancher/k3s/k3s.yaml .`), fix the server URL to the VM IP:6443.
+#     Then `KUBECONFIG=... kubectl apply -f ../../config/deploy/agent-daemonset.yaml` (with ZONE=zone-001 etc.).
+#   - For pure Podman/standalone agent: use the vm-agent-example.sh or the podman run command below.
+#   - Find private IPs via Azure portal or `az vm list-ip-addresses`.
 
-# 8. Validate using the scenarios in the plan doc (cross zone nc/curl + watch agent ringbuf/logs on both ends).
+# 8. Validate using the scenarios in the plan doc (cross-zone traffic between the two VMs and/or the AKS nodes, watch DFW ringbuf/logs, use the controller UI at :8082 for live config).
 ```
 
 **Important for DFW correctness**:
