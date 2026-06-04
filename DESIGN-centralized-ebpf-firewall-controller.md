@@ -1398,10 +1398,26 @@ Controller binary has similar debug subcommands + a `/healthz` and optional gRPC
 
 In addition to the ringbuf + perHostStatus already described:
 
+- **Monitoring scope**: monitoring values are derived exclusively from DFW zone rules / policies. User-defined policies are intentionally excluded from the aggregate monitoring views so dashboards and alerts reflect only centrally managed zone policy state.
+- **Agent health monitoring**:
+  - `ebpf_controller_agents_connected`: total devices with an active agent connection.
+  - `ebpf_controller_agents_disconnected`: registered devices without an active agent connection.
+  - `ebpf_controller_agent_coverage_rate`: percentage of total registered devices with a working agent, calculated as `connected / registered * 100` (example: `98.2% = 1247 / 1270`).
+- **Policy version distribution**:
+  - Track the policy revision currently enforced by agents for every zone.
+  - Surface both the zone total and the revision skew so operators can immediately spot lagging rollouts, for example `Zone A | 156 agents | Latest | 3 on v42, 1 on v41`.
+  - Export a controller metric such as `ebpf_controller_zone_policy_version_agents{zone,version}` and expose the same breakdown in the Grafana dashboard.
+- **Policy coverage**:
+  - Track how many ingress and egress rules are generated per zone from DFW zone policy compilation.
+  - Export per-zone and fleet-wide totals, for example `60 ingress`, `44 egress`, `104 total` across all zones.
+  - Useful controller metrics include `ebpf_controller_zone_ingress_rules`, `ebpf_controller_zone_egress_rules`, and `ebpf_controller_zone_rules_total`.
 - Controller metrics: `ebpf_controller_hosts_registered`, `ebpf_controller_compiles_total`, `ebpf_controller_push_latency_seconds{host}`, `ebpf_controller_policy_versions`.
 - Agent metrics + the ones listed in CLI section.
-- Grafana dashboard template (shipped in the chart): per-host policy age, drop rate by priority band, map utilization heat map, agent CPU when under attack (drops are cheap).
+- Grafana dashboard template (shipped in the chart): agent connectivity summary, coverage rate, per-zone policy version distribution, per-zone ingress/egress rule totals, per-host policy age, drop rate by priority band, map utilization heat map, agent CPU when under attack (drops are cheap).
 - Alerts examples:
+  - Coverage rate drops below the target SLO or disconnected devices increase sharply.
+  - A zone remains version-skewed for too long after a rollout.
+  - Unexpected drop in generated ingress/egress rule count for a zone (possible compiler or source-policy regression).
   - `ebpf_firewall_map_utilization > 0.8` for 5m (split policy soon).
   - Host has `Applied=False` for > 10m.
   - Sudden spike in drops from a new source after a policy change (possible bad rule or attack).
