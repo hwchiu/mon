@@ -1425,6 +1425,49 @@ In addition to the ringbuf + perHostStatus already described:
 
 Events from the controller (on CFP/MH) + agent-forwarded ringbuf events give a good audit trail for "who changed what and what was the effect".
 
+### Auditing
+
+- **Audit scope**: audit data is collected exclusively from DFW zone rules/policies. User-defined policies are excluded from audit views to keep compliance and incident analysis aligned with centrally managed zone policy intent.
+- **Audit event fields** (normalized schema for controller storage and query):
+  - `timestamp`
+  - `source_ip`
+  - `destination_ip`
+  - `source_port`
+  - `destination_port`
+  - `protocol`
+  - `source_zone`
+  - `destination_zone`
+  - `blocked_by` (policy/rule identifier)
+  - `direction` (ingress/egress)
+- **Blocked traffic analytics** (default dashboard and API aggregates):
+  - Total blocked traffic per 24 hours.
+  - Blocked traffic by zone.
+  - Protocol split (TCP/UDP/ICMP/other).
+  - Top blocked target ports.
+  - Blocked traffic by specific policy/rule.
+  - Sample blocked traffic entries with timestamps for triage workflows.
+- **Audit logger (kernel space + upstream path)**:
+  - On `block`, record src/dst/proto/port tuple and direction metadata.
+  - On `match`, record which policy/rule matched (`blocked_by` attribution).
+  - Logging is sample-based (not full packet capture) to control overhead and storage costs.
+  - Agent forwards sampled audit events upstream to the controller for aggregation, retention, and query.
+
+### Simulation and Dry Run
+
+- Provide a standalone simulation component that reads live policy data from the registry.
+- Support two non-enforcing modes for pre-change analysis and validation:
+  1. **Simulation mode**: replay packet/event samples against current candidate policy revisions and report projected allow/deny outcomes.
+  2. **Dry-run mode**: evaluate live traffic decisions in parallel without enforcing changes on production datapaths.
+- Both modes must guarantee **no enforcement on live traffic** and produce auditable comparison outputs (current vs candidate policy outcomes).
+
+### Key Requirement Summary
+
+- **Scale**: support fleet-scale hosts/zones and high rule counts with predictable performance and operational safety.
+- **Propagation latency**: keep policy compile/distribution/apply latency bounded and observable from controller to agent.
+- **Coverage**: maintain high agent connectivity and measurable policy/audit coverage across all managed zones.
+- **eBPF support**: preserve kernel-space enforcement and sampled audit logging through XDP/tc/cgroup-compatible paths.
+- **Deployment**: support both Kubernetes-native and baremetal/VM operational models with consistent control-plane behavior.
+
 ### Policy Lifecycle Operations (GitOps friendly)
 
 - Author CFPs in Git (or via a policy UI that emits YAML).
